@@ -5,10 +5,12 @@ import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
 import { SymbolTable } from './symbol-table.js';
 import { ASTCache } from './ast-cache.js';
-import { findSiblingChild, getLanguageFromFilename, yieldToEventLoop } from './utils.js';
+import { getLanguageFromFilename, yieldToEventLoop, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures } from './utils.js';
+import { isNodeExported } from './export-detection.js';
 import { detectFrameworkFromAST } from './framework-detection.js';
 import { WorkerPool } from './workers/worker-pool.js';
 import type { ParseWorkerResult, ParseWorkerInput, ExtractedImport, ExtractedCall, ExtractedHeritage, ExtractedRoute } from './workers/parse-worker.js';
+import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from './constants.js';
 
 export type FileProgressCallback = (current: number, total: number, filePath: string) => void;
 
@@ -339,8 +341,8 @@ const processParsingSequential = async (
 
     if (!language) continue;
 
-    // Skip very large files — they can crash tree-sitter or cause OOM
-    if (file.content.length > 512 * 1024) continue;
+    // Skip files larger than the max tree-sitter buffer (32 MB)
+    if (file.content.length > TREE_SITTER_MAX_BUFFER) continue;
 
     try {
       await loadLanguage(language, file.path);
@@ -350,7 +352,7 @@ const processParsingSequential = async (
 
     let tree;
     try {
-      tree = parser.parse(file.content, undefined, { bufferSize: 1024 * 256 });
+      tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
     } catch (parseError) {
       console.warn(`Skipping unparseable file: ${file.path}`);
       continue;
@@ -434,7 +436,7 @@ const processParsingSequential = async (
 
       const definitionNodeForRange = getDefinitionNodeFromCaptures(captureMap);
       const startLine = definitionNodeForRange ? definitionNodeForRange.startPosition.row : (nameNode ? nameNode.startPosition.row : 0);
-      const nodeId = generateId(nodeLabel, `${file.path}:${nodeName}:${startLine}`);
+      const nodeId = generateId(nodeLabel, `${file.path}:${nodeName}`);
 
       const definitionNode = getDefinitionNodeFromCaptures(captureMap);
       const frameworkHint = definitionNode
