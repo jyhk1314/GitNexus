@@ -189,7 +189,8 @@ export const loadGraphToKuzu = async (
     let totalNodes = 0;
     for (const tableName of NODE_TABLES) {
       try {
-        const countRes = await conn.query(`MATCH (n:${tableName}) RETURN count(n) AS cnt`);
+        const label = escapeTableName(tableName);
+        const countRes = await conn.query(`MATCH (n:${label}) RETURN count(n) AS cnt`);
         const countRow = await countRes.getNext();
         const count = countRow ? (countRow.cnt ?? countRow[0] ?? 0) : 0;
         totalNodes += Number(count);
@@ -246,7 +247,15 @@ const getCopyQuery = (table: NodeTableName, path: string): string => {
   if (table === 'Process') {
     return `COPY ${t}(id, label, heuristicLabel, processType, stepCount, communities, entryPointId, terminalId) FROM "${path}" ${COPY_CSV_OPTS}`;
   }
-  // Code element tables (Function, Class, Interface, Method, CodeElement, and multi-language)
+
+  // Struct/Enum/Macro 等：CODE_ELEMENT_BASE 只有 6 列，无 isExported
+  const BASE_CODE_ELEMENT_TABLES = ['Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
+    'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module'];
+  if (BASE_CODE_ELEMENT_TABLES.includes(table)) {
+    return `COPY ${t}(id, name, filePath, startLine, endLine, content) FROM "${path}" ${COPY_CSV_OPTS}`;
+  }
+
+  // Code element tables with isExported (Function, Class, Interface, Method, CodeElement)
   return `COPY ${t}(id, name, filePath, startLine, endLine, isExported, content) FROM "${path}" ${COPY_CSV_OPTS}`;
 };
 
@@ -323,7 +332,8 @@ export const getKuzuStats = async (): Promise<{ nodes: number; edges: number }> 
     let totalNodes = 0;
     for (const tableName of NODE_TABLES) {
       try {
-        const nodeResult = await conn.query(`MATCH (n:${tableName}) RETURN count(n) AS cnt`);
+        const label = escapeTableName(tableName);
+        const nodeResult = await conn.query(`MATCH (n:${label}) RETURN count(n) AS cnt`);
         const nodeRow = await nodeResult.getNext();
         totalNodes += Number(nodeRow?.cnt ?? nodeRow?.[0] ?? 0);
       } catch {

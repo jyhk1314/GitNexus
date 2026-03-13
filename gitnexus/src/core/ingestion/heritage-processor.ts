@@ -14,6 +14,7 @@ import { loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
 import { getLanguageFromFilename, yieldToEventLoop } from './utils.js';
+import { getRealCppClassOrStructName } from './parsing-processor.js';
 import type { ExtractedHeritage } from './workers/parse-worker.js';
 
 export const processHeritage = async (
@@ -77,7 +78,12 @@ export const processHeritage = async (
 
       // EXTENDS: Class extends another Class
       if (captureMap['heritage.class'] && captureMap['heritage.extends']) {
-        const className = captureMap['heritage.class'].text;
+        let className = captureMap['heritage.class'].text;
+        if (language === 'cpp') {
+          let p = captureMap['heritage.class'].parent;
+          while (p && p.type !== 'class_specifier' && p.type !== 'struct_specifier') p = p.parent;
+          if (p) className = getRealCppClassOrStructName(p, className);
+        }
         const parentClassName = captureMap['heritage.extends'].text;
 
         // Resolve both class IDs
@@ -104,7 +110,12 @@ export const processHeritage = async (
 
       // IMPLEMENTS: Class implements Interface (TypeScript only)
       if (captureMap['heritage.class'] && captureMap['heritage.implements']) {
-        const className = captureMap['heritage.class'].text;
+        let className = captureMap['heritage.class'].text;
+        if (language === 'cpp') {
+          let p = captureMap['heritage.class'].parent;
+          while (p && p.type !== 'class_specifier' && p.type !== 'struct_specifier') p = p.parent;
+          if (p) className = getRealCppClassOrStructName(p, className);
+        }
         const interfaceName = captureMap['heritage.implements'].text;
 
         // Resolve class and interface IDs

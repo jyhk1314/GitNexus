@@ -52,6 +52,59 @@ const getDefinitionNodeFromCaptures = (captureMap: Record<string, any>): any | n
 };
 
 // ============================================================================
+// C++ CLASS/STRUCT - Skip export macros (e.g. class DLL_API MyClass) & forward declarations
+// ============================================================================
+
+const CPP_EXPORT_MACRO_NAMES = new Set([
+  'DLL_API', 'API', 'WINAPI', 'APIENTRY', 'CALLBACK', 'STDCALL', 'CDECL',
+  'EXPORT_API', 'IMPORT_API', 'DLLEXPORT', 'DLLIMPORT', '__declspec',
+]);
+
+function collectDescendantsByType(node: any, typeName: string, out: any[]): void {
+  if (!node) return;
+  if (node.type === typeName) out.push(node);
+  const n = node.childCount ?? 0;
+  for (let i = 0; i < n; i++) {
+    const c = node.child(i);
+    if (c) collectDescendantsByType(c, typeName, out);
+  }
+}
+
+function findFirstDescendant(node: any, typeName: string): any {
+  if (!node) return null;
+  if (node.type === typeName) return node;
+  const n = node.childCount ?? 0;
+  for (let i = 0; i < n; i++) {
+    const c = node.child(i);
+    const found = c ? findFirstDescendant(c, typeName) : null;
+    if (found) return found;
+  }
+  return null;
+}
+
+function hasClassOrStructBody(specifierNode: any): boolean {
+  if (!specifierNode) return false;
+  const body: any[] = [];
+  collectDescendantsByType(specifierNode, 'field_declaration_list', body);
+  return body.length > 0;
+}
+
+export function getRealCppClassOrStructName(specifierNode: any, capturedName: string): string {
+  if (!specifierNode || !CPP_EXPORT_MACRO_NAMES.has(capturedName)) return capturedName;
+  const typeIds: any[] = [];
+  collectDescendantsByType(specifierNode, 'type_identifier', typeIds);
+  if (typeIds.length === 0) return capturedName;
+  typeIds.sort((a, b) => {
+    const pa = a.startPosition ?? { row: 0, column: 0 };
+    const pb = b.startPosition ?? { row: 0, column: 0 };
+    if (pa.row !== pb.row) return pa.row - pb.row;
+    return pa.column - pb.column;
+  });
+  const last = typeIds[typeIds.length - 1];
+  return last.text ?? capturedName;
+}
+
+// ============================================================================
 // EXPORT DETECTION - Language-specific visibility detection
 // ============================================================================
 
@@ -339,7 +392,11 @@ const processParsingSequential = async (
       const nameNode = captureMap['name'];
       // Synthesize name for constructors without explicit @name capture (e.g. Swift init)
       if (!nameNode && !captureMap['definition.constructor']) return;
-      const nodeName = nameNode ? nameNode.text : 'init';
+      let nodeName = nameNode ? nameNode.text : 'init';
+      if (language === 'cpp') {
+        const specifier = captureMap['definition.class'] ?? captureMap['definition.struct'];
+        if (specifier) nodeName = getRealCppClassOrStructName(specifier, nodeName);
+      }
 
       let nodeLabel = 'CodeElement';
 
@@ -365,6 +422,15 @@ const processParsingSequential = async (
       else if (captureMap['definition.annotation']) nodeLabel = 'Annotation';
       else if (captureMap['definition.constructor']) nodeLabel = 'Constructor';
       else if (captureMap['definition.template']) nodeLabel = 'Template';
+
+      if (language === 'cpp' && (nodeLabel === 'Class' || nodeLabel === 'Struct' || nodeLabel === 'Template')) {
+        let spec = captureMap['definition.class'] ?? captureMap['definition.struct'];
+        if (!spec && captureMap['definition.template']) {
+          const t = captureMap['definition.template'];
+          spec = findFirstDescendant(t, 'class_specifier') ?? findFirstDescendant(t, 'struct_specifier');
+        }
+        if (spec && !hasClassOrStructBody(spec)) return;
+      }
 
       const definitionNodeForRange = getDefinitionNodeFromCaptures(captureMap);
       const startLine = definitionNodeForRange ? definitionNodeForRange.startPosition.row : (nameNode ? nameNode.startPosition.row : 0);

@@ -175,30 +175,37 @@ const generateFolderCSV = (nodes: GraphNode[]): string => {
 
 /**
  * Generate CSV for code element nodes (Function, Class, Interface, Method, CodeElement)
- * Headers: id,name,filePath,startLine,endLine,isExported,content
+ * Full schema: id,name,filePath,startLine,endLine,isExported,content (7 cols)
+ * Base schema (Struct, Enum, Macro): id,name,filePath,startLine,endLine,content (6 cols)
  */
 const generateCodeElementCSV = (
   nodes: GraphNode[],
   label: NodeLabel,
-  fileContents: Map<string, string>
+  fileContents: Map<string, string>,
+  includeIsExported: boolean = true
 ): string => {
-  const headers = ['id', 'name', 'filePath', 'startLine', 'endLine', 'isExported', 'content'];
+  const headers = includeIsExported
+    ? ['id', 'name', 'filePath', 'startLine', 'endLine', 'isExported', 'content']
+    : ['id', 'name', 'filePath', 'startLine', 'endLine', 'content'];
   const rows: string[] = [headers.join(',')];
-  
+
   for (const node of nodes) {
     if (node.label !== label) continue;
     const content = extractContent(node, fileContents);
-    rows.push([
+    const base = [
       escapeCSVField(node.id),
       escapeCSVField(node.properties.name || ''),
       escapeCSVField(node.properties.filePath || ''),
       escapeCSVNumber(node.properties.startLine, -1),
       escapeCSVNumber(node.properties.endLine, -1),
-      node.properties.isExported ? 'true' : 'false',
-      escapeCSVField(content),
-    ].join(','));
+    ];
+    if (includeIsExported) {
+      base.push(node.properties.isExported ? 'true' : 'false');
+    }
+    base.push(escapeCSVField(content));
+    rows.push(base.join(','));
   }
-  
+
   return rows.join('\n');
 };
 
@@ -303,6 +310,7 @@ export const generateAllCSVs = (
   
   // Generate node CSVs
   const nodeCSVs = new Map<NodeTableName, string>();
+
   nodeCSVs.set('File', generateFileCSV(nodes, fileContents));
   nodeCSVs.set('Folder', generateFolderCSV(nodes));
   nodeCSVs.set('Function', generateCodeElementCSV(nodes, 'Function', fileContents));
@@ -313,6 +321,11 @@ export const generateAllCSVs = (
   nodeCSVs.set('Community', generateCommunityCSV(nodes));
   nodeCSVs.set('Process', generateProcessCSV(nodes));
   
+  // 前端解析时增加C\CPP关键字表
+  nodeCSVs.set('Struct', generateCodeElementCSV(nodes, 'Struct', fileContents, false));
+  nodeCSVs.set('Enum', generateCodeElementCSV(nodes, 'Enum', fileContents, false));
+  nodeCSVs.set('Macro', generateCodeElementCSV(nodes, 'Macro', fileContents, false));
+
   // Generate single relation CSV
   const relCSV = generateRelationCSV(graph);
   

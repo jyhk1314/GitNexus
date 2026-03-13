@@ -13,6 +13,7 @@ import { loadParser, loadLanguage } from '../tree-sitter/parser-loader';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries';
 import { generateId } from '../../lib/utils';
 import { getLanguageFromFilename } from './utils';
+import { getRealCppClassOrStructName } from './parsing-processor';
 
 export const processHeritage = async (
   graph: KnowledgeGraph,
@@ -66,7 +67,12 @@ export const processHeritage = async (
 
       // EXTENDS: Class extends another Class
       if (captureMap['heritage.class'] && captureMap['heritage.extends']) {
-        const className = captureMap['heritage.class'].text;
+        let className = captureMap['heritage.class'].text;
+        if (language === 'cpp') {
+          let p = captureMap['heritage.class'].parent;
+          while (p && p.type !== 'class_specifier' && p.type !== 'struct_specifier') p = p.parent;
+          if (p) className = getRealCppClassOrStructName(p, className);
+        }
         const parentClassName = captureMap['heritage.extends'].text;
 
         // Resolve both class IDs

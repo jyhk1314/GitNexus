@@ -37,6 +37,15 @@ const resolveImportPath = (
   
   const basePath = currentDir.join('/');
 
+  // 1b. C/C++ style: same-directory for "file.h" (no leading . or /)
+  if (!importPath.startsWith('.') && !importPath.startsWith('<')) {
+    const sameDirPath = currentDir.length ? currentDir.join('/') + '/' + importPath : importPath;
+    if (allFiles.has(sameDirPath)) {
+      resolveCache.set(cacheKey, sameDirPath);
+      return sameDirPath;
+    }
+  }
+
   // 2. Try extensions for all supported languages
   const extensions = [
     '', 
@@ -84,11 +93,19 @@ const resolveImportPath = (
 
   for (let i = 0; i < pathParts.length; i++) {
     const suffix = pathParts.slice(i).join('/');
+    // Try exact suffix first (e.g. "ZmdbWebMonitor.h" — path already has extension)
+    const suffixPatternExact = '/' + suffix;
+    let matchIdx = normalizedFileList.findIndex(filePath =>
+      filePath.endsWith(suffixPatternExact) || filePath.toLowerCase().endsWith(suffixPatternExact.toLowerCase())
+    );
+    if (matchIdx !== -1) {
+      resolveCache.set(cacheKey, allFileList[matchIdx]);
+      return allFileList[matchIdx];
+    }
     for (const ext of extensions) {
       const suffixWithExt = suffix + ext;
-      // Require path separator before match to avoid false positives like "View.java" matching "RootView.java"
       const suffixPattern = '/' + suffixWithExt;
-      const matchIdx = normalizedFileList.findIndex(filePath => 
+      matchIdx = normalizedFileList.findIndex(filePath =>
         filePath.endsWith(suffixPattern) || filePath.toLowerCase().endsWith(suffixPattern.toLowerCase())
       );
       if (matchIdx !== -1) {

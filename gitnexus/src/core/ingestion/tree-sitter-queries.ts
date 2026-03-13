@@ -182,6 +182,10 @@ export const C_QUERIES = `
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @definition.function
 (declaration declarator: (function_declarator declarator: (identifier) @name)) @definition.function
 
+; Functions with const/qualified return types (e.g. "const char Foo(...)")
+(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
+(declaration declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
+
 ; Structs, Unions, Enums, Typedefs
 (struct_specifier name: (type_identifier) @name) @definition.struct
 (union_specifier name: (type_identifier) @name) @definition.union
@@ -228,9 +232,19 @@ export const CPP_QUERIES = `
 (namespace_definition name: (namespace_identifier) @name) @definition.namespace
 (enum_specifier name: (type_identifier) @name) @definition.enum
 
+; Macros
+(preproc_function_def name: (identifier) @name) @definition.macro
+(preproc_def name: (identifier) @name) @definition.macro
+
 ; Functions & Methods
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @definition.function
-(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))) @definition.method
+(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))) @definition.function
+
+; Functions with qualified/const return types (e.g. "const char Foo(...)")
+; tree-sitter-cpp wraps the declarator in pointer_declarator for these cases
+(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
+(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name)))) @definition.function
+(function_definition declarator: (reference_declarator (function_declarator declarator: (identifier) @name))) @definition.function
 
 ; Templates
 (template_declaration (class_specifier name: (type_identifier) @name)) @definition.template

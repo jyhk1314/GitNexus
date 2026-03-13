@@ -7,6 +7,7 @@ import { loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
 import { getLanguageFromFilename, yieldToEventLoop } from './utils.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
 import type { ExtractedCall, ExtractedRoute } from './workers/parse-worker.js';
 
 /**
@@ -254,12 +255,24 @@ interface ResolveResult {
 }
 
 /**
+ * True if two files have a reference (include/import) relationship in either direction.
+ * Used for C++ to only create CALLS when caller and callee files are related.
+ */
+const filesHaveReference = (fileA: string, fileB: string, importMap: ImportMap): boolean => {
+  if (fileA === fileB) return true;
+  if (importMap.get(fileA)?.has(fileB)) return true;
+  if (importMap.get(fileB)?.has(fileA)) return true;
+  return false;
+};
+
+/**
  * Resolve a function call to its target node ID using priority strategy:
  * A. Check imported files first (highest confidence)
  * B. Check local file definitions
  * C. Fuzzy global search (lowest confidence)
- * 
- * Returns confidence score so agents know what to trust.
+ *
+ * For C++: only create a call when target has the same name (already guaranteed by lookup)
+ * and caller/callee files have a reference (same file or include/import in either direction).
  */
 const resolveCallTarget = (
   calledName: string,
@@ -267,6 +280,9 @@ const resolveCallTarget = (
   symbolTable: SymbolTable,
   importMap: ImportMap
 ): ResolveResult | null => {
+  const language = getLanguageFromFilename(currentFile);
+  const isCpp = language === SupportedLanguages.CPlusPlus;
+
   // Strategy B first (cheapest — single map lookup): Check local file
   const localNodeId = symbolTable.lookupExact(currentFile, calledName);
   if (localNodeId) {
@@ -287,7 +303,14 @@ const resolveCallTarget = (
       }
     }
 
-    // Strategy C: Fuzzy global (no import match found)
+    // Strategy C: Fuzzy global (no import match found).
+    // C++: only accept when caller and callee files have a reference (same file or include in either direction).
+    if (isCpp) {
+      const defWithRef = allDefs.find(def => filesHaveReference(currentFile, def.filePath, importMap));
+      if (!defWithRef) return null;
+      const confidence = allDefs.length === 1 ? 0.5 : 0.3;
+      return { nodeId: defWithRef.nodeId, confidence, reason: 'fuzzy-global' };
+    }
     const confidence = allDefs.length === 1 ? 0.5 : 0.3;
     return { nodeId: allDefs[0].nodeId, confidence, reason: 'fuzzy-global' };
   }

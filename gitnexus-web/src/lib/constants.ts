@@ -19,6 +19,8 @@ export const NODE_COLORS: Record<NodeLabel, string> = {
   CodeElement: '#64748b', // Slate - muted
   Community: '#818cf8',  // Indigo light - cluster indicator
   Process: '#f43f5e',    // Rose - execution flow indicator
+  Struct: '#64748b',     // Slate - muted (less important)
+  Macro: '#475569',      // Slate darker - very muted
 };
 
 // Node sizes by type - clear visual hierarchy with dramatic size differences
@@ -41,6 +43,8 @@ export const NODE_SIZES: Record<NodeLabel, number> = {
   CodeElement: 2,  // Generic small
   Community: 0,    // Hidden by default - metadata node
   Process: 0,      // Hidden by default - metadata node
+  Struct: 2,       // Tiny modifier
+  Macro: 1.5,      // Very small - usually hidden anyway
 };
 
 // Community color palette for cluster-based coloring
@@ -82,6 +86,9 @@ export const DEFAULT_VISIBLE_LABELS: NodeLabel[] = [
 export const FILTERABLE_LABELS: NodeLabel[] = [
   'Folder',
   'File',
+  'Struct',   // ← 添加
+  'Enum',     // ← 添加
+  'Macro',    // ← 添加
   'Class',
   'Function',
   'Method',
@@ -114,7 +121,7 @@ export const DEFAULT_VISIBLE_EDGES: EdgeType[] = [
 
 // Edge display info for UI
 export const EDGE_INFO: Record<EdgeType, { color: string; label: string }> = {
-  CONTAINS: { color: '#2d5a3d', label: 'Contains' },
+  CONTAINS: { color: '#fff108', label: 'Contains' },
   DEFINES: { color: '#0e7490', label: 'Defines' },
   IMPORTS: { color: '#1d4ed8', label: 'Imports' },
   CALLS: { color: '#7c3aed', label: 'Calls' },
