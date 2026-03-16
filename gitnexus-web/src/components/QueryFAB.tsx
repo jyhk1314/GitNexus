@@ -1,8 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Terminal, Play, X, ChevronDown, ChevronUp, Loader2, Sparkles, Table } from 'lucide-react';
+import { Trash2, BookmarkPlus } from 'lucide-react';
+import {
+  loadSavedQueries,
+  initializeBuiltins,
+  saveQuery,
+  deleteQuery,
+  type SavedQuery,
+} from '../services/saved-queries-service';
 import { useAppState } from '../hooks/useAppState';
 
-const EXAMPLE_QUERIES = [
+const BUILTIN_QUERIES = [
   {
     label: '所有函数',
     query: `MATCH (n:Function) RETURN n.id AS id, n.name AS name, n.filePath AS path LIMIT 50`,
@@ -69,6 +77,11 @@ export const QueryFAB = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 50;
 
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
+  const [showSaveInput, setShowSaveInput] = useState(false);
+  const [saveLabel, setSaveLabel] = useState('');
+  const saveLabelRef = useRef<HTMLInputElement>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -98,6 +111,11 @@ export const QueryFAB = () => {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isExpanded]);
+
+  useEffect(() => {
+    initializeBuiltins(BUILTIN_QUERIES);
+    setSavedQueries(loadSavedQueries());
+  }, []);
 
   const handleRunQuery = useCallback(async () => {
     if (!query.trim() || isRunning) return;
@@ -180,8 +198,8 @@ export const QueryFAB = () => {
     }
   };
 
-  const handleSelectExample = (exampleQuery: string) => {
-    setQuery(exampleQuery);
+  const handleSelectQuery = (q: SavedQuery) => {
+    setQuery(q.query);
     setShowExamples(false);
     textareaRef.current?.focus();
   };
@@ -198,6 +216,25 @@ export const QueryFAB = () => {
     clearQueryHighlights();
     setError(null);
     textareaRef.current?.focus();
+  };
+
+  const handleDeleteQuery = (id: string) => {
+    deleteQuery(id);
+    setSavedQueries(loadSavedQueries());
+  };
+
+  const handleSaveQuery = () => {
+    if (!saveLabel.trim() || !query.trim()) return;
+    saveQuery(saveLabel.trim(), query.trim());
+    setSavedQueries(loadSavedQueries());
+    setShowSaveInput(false);
+    setSaveLabel('');
+  };
+
+  const handleShowSaveInput = () => {
+    setSaveLabel(query.trim().slice(0, 30));
+    setShowSaveInput(true);
+    setTimeout(() => saveLabelRef.current?.focus(), 50);
   };
 
   if (!isExpanded) {
@@ -291,31 +328,59 @@ export const QueryFAB = () => {
               "
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Examples</span>
+              <span>Saved</span>
+              {savedQueries.length > 0 && (
+                <span className="px-1 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-[10px] font-semibold">
+                  {savedQueries.length}
+                </span>
+              )}
               <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showExamples ? 'rotate-180' : ''}`} />
             </button>
 
             {showExamples && (
               <div className="
                 absolute bottom-full left-0 mb-2
-                w-64 py-1
+                w-72 py-1
                 bg-surface border border-border-subtle rounded-lg
                 shadow-xl
                 animate-fade-in
+                max-h-64 overflow-y-auto scrollbar-thin
               ">
-                {EXAMPLE_QUERIES.map((example) => (
-                  <button
-                    key={example.label}
-                    onClick={() => handleSelectExample(example.query)}
+                {savedQueries.length === 0 && (
+                  <p className="px-3 py-2 text-xs text-text-muted">暂无保存的查询</p>
+                )}
+                {savedQueries.map((q) => (
+                  <div
+                    key={q.id}
                     className="
-                      w-full px-3 py-2 text-left
-                      text-sm text-text-secondary
-                      hover:bg-hover hover:text-text-primary
-                      transition-colors
+                      flex items-center justify-between
+                      px-3 py-2
+                      hover:bg-hover
+                      group transition-colors
                     "
                   >
-                    {example.label}
-                  </button>
+                    <button
+                      onClick={() => handleSelectQuery(q)}
+                      className="flex-1 text-left text-sm text-text-secondary hover:text-text-primary truncate"
+                      title={q.query}
+                    >
+                      {q.label}
+                      {q.isBuiltin && (
+                        <span className="ml-1.5 text-[10px] text-text-muted opacity-60">内置</span>
+                      )}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteQuery(q.id); }}
+                      className="
+                        ml-2 p-1 rounded
+                        text-text-muted opacity-0 group-hover:opacity-100
+                        hover:text-red-400 hover:bg-red-500/10
+                        transition-all
+                      "
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -335,6 +400,64 @@ export const QueryFAB = () => {
                 Clear
               </button>
             )}
+
+            {showSaveInput ? (
+              <div className="flex items-center gap-1">
+                <input
+                  ref={saveLabelRef}
+                  value={saveLabel}
+                  onChange={(e) => setSaveLabel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveQuery();
+                    if (e.key === 'Escape') { setShowSaveInput(false); setSaveLabel(''); }
+                  }}
+                  placeholder="查询名称"
+                  className="
+                    w-32 px-2 py-1
+                    bg-surface border border-cyan-500/40 rounded-md
+                    text-xs text-text-primary
+                    placeholder:text-text-muted
+                    focus:border-cyan-500/70 focus:ring-1 focus:ring-cyan-500/20
+                    outline-none
+                  "
+                />
+                <button
+                  onClick={handleSaveQuery}
+                  disabled={!saveLabel.trim()}
+                  className="
+                    p-1.5 rounded-md
+                    text-cyan-400 hover:bg-cyan-500/10
+                    disabled:opacity-40 disabled:cursor-not-allowed
+                    transition-colors
+                  "
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => { setShowSaveInput(false); setSaveLabel(''); }}
+                  className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-hover transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              query.trim() && (
+                <button
+                  onClick={handleShowSaveInput}
+                  className="
+                    flex items-center gap-1 px-2.5 py-1.5
+                    text-xs text-text-secondary
+                    hover:text-cyan-400 hover:bg-cyan-500/10
+                    rounded-md transition-colors
+                  "
+                  title="保存此查询"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                  <span>Save</span>
+                </button>
+              )
+            )}
+
             <button
               onClick={handleRunQuery}
               disabled={!query.trim() || isRunning}
