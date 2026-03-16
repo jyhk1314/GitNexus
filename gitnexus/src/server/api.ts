@@ -18,21 +18,33 @@ import * as readline from 'readline';
 import { fileURLToPath } from 'url';
 import AdmZip from 'adm-zip';
 import { loadMeta, listRegisteredRepos, readRegistry } from '../storage/repo-manager.js';
-import { executeQuery, closeKuzu, withKuzuDb } from '../core/kuzu/kuzu-adapter.js';
-import { NODE_TABLES } from '../core/kuzu/schema.js';
+import { executeQuery, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
+import { NODE_TABLES } from '../core/lbug/schema.js';
 import { GraphNode, GraphRelationship } from '../core/graph/types.js';
-import { searchFTSFromKuzu } from '../core/search/bm25-index.js';
+import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
 // Embedding imports are lazy (dynamic import) to avoid loading onnxruntime-node
 // at server startup — crashes on unsupported Node ABI versions (#89)
 import { LocalBackend } from '../mcp/local/local-backend.js';
 import { mountMCPEndpoints } from './mcp-http.js';
 
+// Tables that require backticks in Cypher queries (matches schema definition)
+const BACKTICK_TABLES = new Set([
+  'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
+  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation',
+  'Constructor', 'Template', 'Module',
+]);
+
+const escapeTableName = (table: string): string => {
+  return BACKTICK_TABLES.has(table) ? `\`${table}\`` : table;
+};
+
 const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
     try {
       let query = '';
+      const escapedTable = escapeTableName(table);
       if (table === 'File') {
         query = `MATCH (n:File) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.content AS content`;
       } else if (table === 'Folder') {
@@ -41,10 +53,8 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
         query = `MATCH (n:Community) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.cohesion AS cohesion, n.symbolCount AS symbolCount`;
       } else if (table === 'Process') {
         query = `MATCH (n:Process) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.processType AS processType, n.stepCount AS stepCount, n.communities AS communities, n.entryPointId AS entryPointId, n.terminalId AS terminalId`;
-      } else if (table === 'Macro') {
-        query = `MATCH (n:\`Macro\`) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`;
       } else {
-        query = `MATCH (n:${table}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`;
+        query = `MATCH (n:${escapedTable}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`;
       }
 
       const rows = await executeQuery(query);
@@ -572,8 +582,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
-      const kuzuPath = path.join(entry.storagePath, 'kuzu');
-      const graph = await withKuzuDb(kuzuPath, async () => buildGraph());
+      const lbugPath = path.join(entry.storagePath, 'lbug');
+      const graph = await withLbugDb(lbugPath, async () => buildGraph());
       res.json(graph);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to build graph' });
@@ -594,8 +604,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
-      const kuzuPath = path.join(entry.storagePath, 'kuzu');
-      const result = await withKuzuDb(kuzuPath, () => executeQuery(cypher));
+      const lbugPath = path.join(entry.storagePath, 'lbug');
+      const result = await withLbugDb(lbugPath, () => executeQuery(cypher));
       res.json({ result });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Query failed' });
@@ -616,20 +626,20 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
-      const kuzuPath = path.join(entry.storagePath, 'kuzu');
+      const lbugPath = path.join(entry.storagePath, 'lbug');
       const parsedLimit = Number(req.body.limit ?? 10);
       const limit = Number.isFinite(parsedLimit)
         ? Math.max(1, Math.min(100, Math.trunc(parsedLimit)))
         : 10;
 
-      const results = await withKuzuDb(kuzuPath, async () => {
+      const results = await withLbugDb(lbugPath, async () => {
         const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
         if (isEmbedderReady()) {
           const { semanticSearch } = await import('../core/embeddings/embedding-pipeline.js');
           return hybridSearch(query, limit, executeQuery, semanticSearch);
         }
         // FTS-only fallback when embeddings aren't loaded
-        return searchFTSFromKuzu(query, limit);
+        return searchFTSFromLbug(query, limit);
       });
       res.json({ results });
     } catch (err: any) {
@@ -843,11 +853,11 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
     console.log(`GitNexus server running on http://${host}:${port}`);
   });
 
-  // Graceful shutdown — close Express + KuzuDB cleanly
+  // Graceful shutdown — close Express + LadybugDB cleanly
   const shutdown = async () => {
     server.close();
     await cleanupMcp();
-    await closeKuzu();
+    await closeLbug();
     await backend.disconnect();
     process.exit(0);
   };

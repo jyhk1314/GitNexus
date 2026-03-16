@@ -71,7 +71,7 @@ const AppContent = () => {
       }
 
       // Auto-start embeddings pipeline in background when KuzuDB loaded (required for vector search)
-      if (result.kuzuReady !== false) {
+      if (result.lbugReady !== false) {
         startEmbeddings().catch((err) => {
           if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
             startEmbeddings('wasm').catch(console.warn);
@@ -120,7 +120,7 @@ const AppContent = () => {
         initializeAgent(projectName);
       }
 
-      if (result.kuzuReady !== false) {
+      if (result.lbugReady !== false) {
         startEmbeddings().catch((err) => {
           if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
             startEmbeddings('wasm').catch(console.warn);

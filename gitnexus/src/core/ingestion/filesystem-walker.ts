@@ -40,8 +40,8 @@ export const walkRepositoryPaths = async (
 
   const filtered = files.filter(file => !shouldIgnorePath(file));
   const entries: ScannedFile[] = [];
-  const skippedPaths: string[] = [];
   let processed = 0;
+  let skippedLarge = 0;
 
   for (let start = 0; start < filtered.length; start += READ_CONCURRENCY) {
     const batch = filtered.slice(start, start + READ_CONCURRENCY);
@@ -49,35 +49,27 @@ export const walkRepositoryPaths = async (
       batch.map(async relativePath => {
         const fullPath = path.join(repoPath, relativePath);
         const stat = await fs.stat(fullPath);
-        const normalized = relativePath.replace(/\\/g, '/');
         if (stat.size > MAX_FILE_SIZE) {
-          return { skipped: normalized, size: stat.size };
+          skippedLarge++;
+          return null;
         }
-        return { path: normalized, size: stat.size };
+        return { path: relativePath.replace(/\\/g, '/'), size: stat.size };
       })
     );
 
     for (const result of results) {
       processed++;
       if (result.status === 'fulfilled' && result.value !== null) {
-        if ('skipped' in result.value) {
-          skippedPaths.push(result.value.skipped);
-          onProgress?.(processed, filtered.length, result.value.skipped);
-        } else {
-          entries.push({ path: result.value.path, size: result.value.size });
-          onProgress?.(processed, filtered.length, result.value.path);
-        }
+        entries.push(result.value);
+        onProgress?.(processed, filtered.length, result.value.path);
       } else {
         onProgress?.(processed, filtered.length, batch[results.indexOf(result)]);
       }
     }
   }
 
-  if (skippedPaths.length > 0) {
-    const list = skippedPaths.length <= 10
-      ? skippedPaths.join(', ')
-      : `${skippedPaths.slice(0, 10).join(', ')} ... +${skippedPaths.length - 10} more`;
-    console.warn(`  Skipped ${skippedPaths.length} large files (>${MAX_FILE_SIZE / 1024}KB, likely generated/vendored): ${list}`);
+  if (skippedLarge > 0) {
+    console.warn(`  Skipped ${skippedLarge} large files (>${MAX_FILE_SIZE / 1024}KB, likely generated/vendored)`);
   }
 
   return entries;
