@@ -347,7 +347,7 @@ export const analyzeCommand = async (
   const totalTime = ((Date.now() - t0Global) / 1000).toFixed(1);
 
   if (elapsedTimer) clearInterval(elapsedTimer);
-  process.removeListener('SIGINT', sigintHandler);
+  if (sigintHandler) process.removeListener('SIGINT', sigintHandler);
   console.log = origLog;
   console.warn = origWarn;
   console.error = origError;
@@ -359,17 +359,17 @@ export const analyzeCommand = async (
     const summary = [
       `Repository indexed successfully (${totalTime}s)${embeddingsCached ? ` [${cachedEmbeddings.length} embeddings cached]` : ''}`,
       `${stats.nodes.toLocaleString()} nodes | ${stats.edges.toLocaleString()} edges | ${pipelineResult.communityResult?.stats.totalCommunities || 0} clusters | ${pipelineResult.processResult?.stats.totalProcesses || 0} flows`,
-      `KuzuDB ${kuzuTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`,
+      `LadybugDB ${lbugTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`,
       repoPath,
     ];
     summary.forEach(line => process.stderr.write('  ' + line + '\n'));
     if (aiContext.files.length > 0) process.stderr.write('  Context: ' + aiContext.files.join(', ') + '\n');
-    if (kuzuWarnings.length > 0) {
-      const totalFallback = kuzuWarnings.reduce((sum, w) => {
+    if (lbugWarnings.length > 0) {
+      const totalFallback = lbugWarnings.reduce((sum, w) => {
         const m = w.match(/\((\d+) edges\)/);
         return sum + (m ? parseInt(m[1]) : 0);
       }, 0);
-      process.stderr.write(`  Note: ${totalFallback} edges across ${kuzuWarnings.length} types inserted via fallback\n`);
+      process.stderr.write(`  Note: ${totalFallback} edges across ${lbugWarnings.length} types inserted via fallback\n`);
     }
   } else if (bar) {
     bar.update(100, { phase: 'Done' });
@@ -381,15 +381,17 @@ export const analyzeCommand = async (
     const embeddingsCached = cachedEmbeddings.length > 0;
     console.log(`\n  Repository indexed successfully (${totalTime}s)${embeddingsCached ? ` [${cachedEmbeddings.length} embeddings cached]` : ''}\n`);
     console.log(`  ${stats.nodes.toLocaleString()} nodes | ${stats.edges.toLocaleString()} edges | ${pipelineResult.communityResult?.stats.totalCommunities || 0} clusters | ${pipelineResult.processResult?.stats.totalProcesses || 0} flows`);
-    console.log(`  KuzuDB ${kuzuTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`);
+    console.log(`  LadybugDB ${lbugTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`);
     console.log(`  ${repoPath}`);
-    if (aiContext.files.length > 0) console.log(`  Context: ${aiContext.files.join(', ')}`);
-    if (kuzuWarnings.length > 0) {
-      const totalFallback = kuzuWarnings.reduce((sum, w) => {
+    if (aiContext.files.length > 0) {
+      console.log(`  Context: ${aiContext.files.join(', ')}`);
+    }
+    if (lbugWarnings.length > 0) {
+      const totalFallback = lbugWarnings.reduce((sum, w) => {
         const m = w.match(/\((\d+) edges\)/);
         return sum + (m ? parseInt(m[1]) : 0);
       }, 0);
-      console.log(`  Note: ${totalFallback} edges across ${kuzuWarnings.length} types inserted via fallback (schema will be updated in next release)`);
+      console.log(`  Note: ${totalFallback} edges across ${lbugWarnings.length} types inserted via fallback (schema will be updated in next release)`);
     }
     try {
       await fs.access(getGlobalRegistryPath());
@@ -399,10 +401,8 @@ export const analyzeCommand = async (
     console.log('');
   }
 
-  // ONNX Runtime registers native atexit hooks that segfault during process
-  // shutdown on macOS (#38) and some Linux configs (#40). Force-exit to
-  // bypass them when embeddings were loaded.
-  if (!embeddingSkipped) {
-    process.exit(0);
-  }
+  // LadybugDB's native module holds open handles that prevent Node from exiting.
+  // ONNX Runtime also registers native atexit hooks that segfault on some
+  // platforms (#38, #40). Force-exit to ensure clean termination.
+  process.exit(0);
 };
