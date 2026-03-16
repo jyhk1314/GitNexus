@@ -1088,26 +1088,24 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
               </span>
             </div>
 
-            {/* 本地/私有 Git 接入说明 */}
+            {/* 添加本地或私有仓库说明 */}
             <div className="mt-6 p-4 bg-elevated/60 border border-border-subtle rounded-xl text-sm text-text-secondary">
-              <p className="font-medium text-text-primary mb-1">添加本地或私有仓库</p>
-              <p className="mb-2">
-                在运行 GitNexus 的机器上，对已克隆的本地/私有仓库执行：
+              <p className="font-medium text-text-primary mb-2">添加本地或私有仓库</p>
+              <p className="mb-3 text-xs text-text-muted">
+                如需分析本地或私有 Git 仓库，请使用 <span className="font-medium text-text-secondary">Local Git</span> 或 <span className="font-medium text-text-secondary">ZIP Upload</span> 标签页的代理模式先分析<span className="font-medium text-text-secondary">[至少一次]</span> ：
               </p>
-              <code className="block px-3 py-2 bg-surface rounded-lg text-accent font-mono text-xs break-all">
-                gitnexus add /path/to/your/repo
-              </code>
-              <p className="mt-2 text-xs text-text-muted">
-                或使用 <code className="px-1 py-0.5 bg-surface rounded">gitnexus analyze /path/to/repo</code>。完成后刷新上方连接或重新选择仓库即可在列表中看到新仓库。
-              </p>
-              <p className="mt-3 text-xs text-text-muted border-t border-border-subtle pt-3">
-                <span className="font-medium text-text-secondary">需鉴权（令牌）时：</span>请先在服务器上使用令牌克隆仓库，再对克隆目录执行上述命令。例如：
-              </p>
-              <code className="block mt-1 px-3 py-2 bg-surface rounded-lg text-accent font-mono text-xs break-all">
-                git clone https://&lt;您的令牌&gt;@git.example.com/org/repo.git /path/to/repo
-              </code>
-              <p className="mt-1 text-xs text-text-muted">
-                或将令牌配置到 Git 凭据（如 <code className="px-1 py-0.5 bg-surface rounded">git config credential.helper</code>）后执行 <code className="px-1 py-0.5 bg-surface rounded">git clone</code>，再运行 <code className="px-1 py-0.5 bg-surface rounded">gitnexus add /path/to/repo</code>。
+              <ul className="space-y-2 text-xs text-text-muted mb-3">
+                <li className="flex items-start gap-2">
+                  <span className="text-accent mt-0.5">•</span>
+                  <span><span className="font-medium text-text-secondary">Local Git 模式：</span>填写代理地址后，服务端会自动克隆并分析代码，完成后即可在此 Server 模式中直接查看，无需重复分析。</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-accent mt-0.5">•</span>
+                  <span><span className="font-medium text-text-secondary">ZIP Upload 模式：</span>填写代理地址后上传 ZIP 文件，服务端会自动解压并分析代码，完成后即可在此 Server 模式中直接查看，无需重复分析。</span>
+                </li>
+              </ul>
+              <p className="text-xs text-text-muted border-t border-border-subtle pt-3">
+                <span className="font-medium text-text-secondary">注意：</span>GitHub 公开仓库不支持 Server 模式，请使用 GitHub 标签页直接克隆。
               </p>
             </div>
           </div>

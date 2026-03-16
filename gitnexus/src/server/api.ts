@@ -952,52 +952,6 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
   app.get('/api/proxy', proxyHandler);
   app.post('/api/proxy', express.raw({ type: '*/*', limit: '50mb' }), proxyHandler);
 
-  // 临时：服务端本地测试代理能否拉取指定 Git 仓库（GET /api/proxy/test?url=...&token=可选）
-  app.get('/api/proxy/test', async (req, res) => {
-    const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
-    const token = typeof req.query.token === 'string' ? req.query.token.trim() : undefined;
-    if (!url) {
-      res.status(400).json({ ok: false, error: 'Missing url query parameter. Example: /api/proxy/test?url=https://host/repo.git' });
-      return;
-    }
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      res.status(400).json({ ok: false, error: 'Invalid URL' });
-      return;
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      res.status(400).json({ ok: false, error: 'Only http/https URLs are allowed' });
-      return;
-    }
-    const base = url.replace(/\/+$/, '').replace(/\.git$/i, '');
-    const testUrl = `${base}.git/info/refs?service=git-upload-pack`;
-    console.log(`[proxy/test] 测试拉取: ${url}`);
-    try {
-      const headers: Record<string, string> = { 'User-Agent': 'git/isomorphic-git', Accept: '*/*' };
-      if (token) headers['Authorization'] = `Basic ${Buffer.from(`${token}:`, 'utf8').toString('base64')}`;
-      const response = await fetch(testUrl, { method: 'GET', headers });
-      if (response.ok) {
-        console.log(`[proxy/test] 正常拉取: ${url} -> OK`);
-        res.json({ ok: true, message: 'Server can reach the Git repo (info/refs OK)' });
-      } else {
-        console.log(`[proxy/test] 拉取失败: ${url} -> ${response.status}`);
-        res.status(response.status).json({
-          ok: false,
-          error: `Git server returned ${response.status}`,
-          status: response.status,
-        });
-      }
-    } catch (err: any) {
-      console.error('Proxy test error:', err);
-      res.status(500).json({
-        ok: false,
-        error: err?.message || String(err),
-      });
-    }
-  });
-
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error('Unhandled error:', err);

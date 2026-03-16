@@ -31,15 +31,6 @@ program
   .action(createLazyAction(() => import('./analyze.js'), 'analyzeCommand'));
 
 program
-  .command('add <path>')
-  .description('Add and index a local or private Git repo (接入本地/私有化 Git 仓库并建索引)')
-  .option('-f, --force', 'Force full re-index even if up to date')
-  .option('--embeddings', 'Enable embedding generation for semantic search (off by default)')
-  .option('--skills', 'Generate repo-specific skill files from detected communities')
-  .option('-v, --verbose', 'Enable verbose ingestion warnings (default: false)')
-  .action(createLazyAction(() => import('./analyze.js'), 'analyzeCommand'));
-
-program
   .command('serve')
   .description('Start local HTTP server for web UI connection')
   .option('-p, --port <port>', 'Port number', '6660')

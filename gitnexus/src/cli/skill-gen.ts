@@ -9,14 +9,21 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import { existsSync } from 'fs';
 import { PipelineResult } from '../types/pipeline.js';
 import { CommunityNode, CommunityMembership } from '../core/ingestion/community-processor.js';
 import { ProcessNode } from '../core/ingestion/process-processor.js';
 import { GraphNode, KnowledgeGraph } from '../core/graph/types.js';
+import { getStoragePath } from '../storage/repo-manager.js';
 
 // ============================================================================
 // TYPES
 // ============================================================================
+
+interface SkillConfig {
+  /** Directories to exclude when deriving community labels from folder names (community-specific filtering) */
+  excludedCommunityFolders: string[];
+}
 
 export interface GeneratedSkillInfo {
   name: string;
@@ -77,13 +84,16 @@ export const generateSkillFiles = async (
 
   console.log('\n  Generating repo-specific skills...');
 
+  // Load skill generation config
+  const skillConfig = await loadSkillConfig(repoPath);
+
   // Step 1: Build communities from memberships (not the filtered communities array).
   // The community processor skips singletons from its communities array but memberships
   // include ALL assignments. For repos with sparse CALLS edges, the communities array
   // can be empty while memberships still has useful groupings.
   const communities = communityResult.communities.length > 0
     ? communityResult.communities
-    : buildCommunitiesFromMemberships(communityResult.memberships, graph, repoPath);
+    : buildCommunitiesFromMemberships(communityResult.memberships, graph, repoPath, skillConfig);
 
   const aggregated = aggregateCommunities(communities);
 
@@ -177,6 +187,58 @@ export const generateSkillFiles = async (
 };
 
 // ============================================================================
+// CONFIG MANAGEMENT
+// ============================================================================
+
+const DEFAULT_EXCLUDED_FOLDERS = ['src', 'lib', 'core', 'utils', 'common', 'shared', 'helpers', 'app', 'helper'];
+
+/**
+ * Load skill generation config from .gitnexus/skill-config.json
+ * Creates default config if file doesn't exist.
+ */
+const loadSkillConfig = async (repoPath: string): Promise<SkillConfig> => {
+  const storagePath = getStoragePath(repoPath);
+  const configPath = path.join(storagePath, 'skill-config.json');
+  
+  // Ensure .gitnexus directory exists
+  try {
+    await fs.mkdir(storagePath, { recursive: true });
+  } catch {
+    // Directory might already exist, ignore
+  }
+
+  // Load existing config or create default
+  if (existsSync(configPath)) {
+    try {
+      const content = await fs.readFile(configPath, 'utf-8');
+      const config = JSON.parse(content) as SkillConfig;
+      
+      // Validate and merge with defaults
+      return {
+        excludedCommunityFolders: Array.isArray(config.excludedCommunityFolders)
+          ? config.excludedCommunityFolders.map(f => f.toLowerCase())
+          : DEFAULT_EXCLUDED_FOLDERS,
+      };
+    } catch (err) {
+      console.warn(`  Warning: Failed to parse skill-config.json, using defaults: ${err}`);
+    }
+  }
+
+  // Create default config file
+  const defaultConfig: SkillConfig = {
+    excludedCommunityFolders: DEFAULT_EXCLUDED_FOLDERS,
+  };
+  
+  try {
+    await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2) + '\n', 'utf-8');
+  } catch (err) {
+    console.warn(`  Warning: Failed to write skill-config.json: ${err}`);
+  }
+
+  return defaultConfig;
+};
+
+// ============================================================================
 // FALLBACK COMMUNITY BUILDER
 // ============================================================================
 
@@ -186,12 +248,14 @@ export const generateSkillFiles = async (
  * @param {CommunityMembership[]} memberships - All node-to-community assignments
  * @param {KnowledgeGraph} graph - The knowledge graph for resolving node metadata
  * @param {string} repoPath - Repository root for path normalization
+ * @param {SkillConfig} config - Skill generation configuration
  * @returns {CommunityNode[]} Synthetic community nodes built from membership data
  */
 const buildCommunitiesFromMemberships = (
   memberships: CommunityMembership[],
   graph: KnowledgeGraph,
-  repoPath: string
+  repoPath: string,
+  config: SkillConfig
 ): CommunityNode[] => {
   // Group memberships by communityId
   const groups = new Map<string, string[]>();
@@ -216,7 +280,7 @@ const buildCommunitiesFromMemberships = (
       const parts = normalized.split('/').filter(Boolean);
       if (parts.length >= 2) {
         const folder = parts[parts.length - 2];
-        if (!['src', 'lib', 'core', 'utils', 'common', 'shared', 'helpers', 'app', 'helper'].includes(folder.toLowerCase())) {
+        if (!config.excludedCommunityFolders.includes(folder.toLowerCase())) {
           folderCounts.set(folder, (folderCounts.get(folder) || 0) + 1);
         }
       }

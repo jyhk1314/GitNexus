@@ -2,53 +2,132 @@
 
 ### 后台服务
 
-#### gitnexus/scripts
+#### 一、gitnexus/scripts
+
+**中文本地化支撑：涉及文件(convert_to_utf8.py)**
+
 1. gitnexus下载仓库后, 自动转换所有字符集到UTF8
 
-#### 
+#### 二、gitnexus/src/server
 
+**核心功能增强：涉及文件(api.ts)**
 
-1、gitnexus支持对接公司git
-2、gitnexus优化C++函数调用关系：相同函数名称并且文件有引用关系的才存在调用关系
-3、gitnexus serve支持API，一键下载并分析代码，代码放在环境变量HOME或服务启动路径下，目录名称为ginexus_code，当代码已存在(registry.json)中存在，就禁止重复下载代码。分析的进度要能返回给客户端。
-4、gitnexus web支持server模式选填仓库名称，避免多仓库时，无法指定仓库访问
-5、gitnexus web支持默认server访问模式，通过url中的参数控制默认server访问，参数中指定服务地址和仓库名
-6、server也要支持cypher query -- 传递后端查询，以及大模型能力
-7、gitnexus下载仓库后，要自动转换所有字符集到UTF8
-8、c++ class/struct的调用应要匹配到对应的.h/.cpp文件中
-9、"文件和文件关系准确性：不准确
-  --a、ZmdbWebMonitor.h：被5个文件包含，实际查询出来只有一个文件，问题可能如下：
-	#include ""ZmdbWebMonitor.h""   ---未查询到
-	#include ""Helper/ZmdbCCryptDES.h""   ---正常查询到"
-10、部分Function缺失：const char* GetRunningState(TZmdbMgrServiceComm *pServiceComm, const char* pszDsn)"
-11、类的构造函数识别为Function--构造函数在.h中实现，识别为Function
-12、"GitNexus的Cypher Query的examples，增加如下内容：
-1)、展示项目的所有目录、文件、类信息：MATCH (n:`Folder`) RETURN n.id AS id, n.name AS name, n.filePath AS path
-2)、按照目录展示对应的源文件：MATCH (f:File) WHERE f.filePath STARTS WITH 'WebMonitor/' RETURN f.name
-3)、按照文件展示其包含的method和fun：MATCH (c:Class) WHERE c.filePath CONTAINS '文件名' RETURN c.name/MATCH (f:Function) WHERE f.filePath CONTAINS '文件名' RETURN f.name/MATCH (m:Method) WHERE m.filePath CONTAINS '文件名' RETURN m.name/MATCH (c:struct) WHERE c.filePath CONTAINS '文件名' RETURN c.name
-4)、给定一个文件名，查询被哪些文件IMPORT: MATCH (s)-[r:CodeRelation {type: 'IMPORTS'}]->(t) WHERE t.name = 'ZmdbWebMonitor.h' RETURN s.name
-5)、给定一个文件名，查询IMPORT了哪些文件：MATCH (s)-[r:CodeRelation {type: 'IMPORTS'}]->(t) WHERE s.name = 'mdbWebMonitor.cpp' RETURN t.name
-6)、给定一个文件名，查询包含的macro:MATCH (n) WHERE n.id STARTS WITH 'Macro:' AND n.filePath CONTAINS '文件名' RETURN n.name
-7)、给定一个符号，查看其入方向的所有关系：npx gitnexus cypher --repo Zmdb ""MATCH (n)-[r]->(m) WHERE n.name = 'CZmdbMasterSignalThread' RETURN r.type AS relation, m.name AS target""
-8)、给定一个符号，查看其出方向的所有关系：npx gitnexus cypher --repo Zmdb ""MATCH (m)-[r]->(n) WHERE n.name = 'CZmdbMasterSignalThread' RETURN r.type AS relation, m.name AS source"""
-13、gitnexus本地git支持分析，向量化模型采用国内镜像源，并输出部署使用手册
-14、zip上传支持向量化
-15、zip上传支持持久化
-16、支持获取模型列表
-17、默认关闭layout optimizing
-18、支持拉分支
-19、"支持根据分支来检索是否已创建：
-1)、主分支时，保存目录名称和仓库名称一致
-2)、非主分支时，保存目录名称=仓库名称_分支名称
-3)、zip上传时，保存目录名称=文件名_zip"wei
-20、支持数据大于50条时进行分页查询
-21、搜索节点时支持自动聚焦，并修复聚焦按钮的可用性
-22、[未实现]cypher query支持自定义，持久化，比如用户执行了一个查询，支持根据各自浏览器使用定制自己的查询接口
-23、[未实现]大模型递归次数可配置
-24、重复克隆要自动跳转到server模式
-25、1.4版本文件占用无法删除问题：数据库连接未关闭
-26、"分析进度展示优化：
-1)、克隆时百分比来回跳
-2)、分析中和正在分析代码阶段来回跳
-3)、正在分析代码不显示文件处理情况
-4)、向量化阶段太晚"
+1. **表名转义处理**
+   - 添加了 `BACKTICK_TABLES` 集合和 `escapeTableName` 函数
+   - 对需要反引号的表名（如 Struct、Enum、Macro 等）进行转义处理
+   - 确保 Cypher 查询中特殊表名能正确执行
+
+2. **createServer 函数增强**
+   - 新增 `opts?: { embeddings?: boolean }` 参数
+   - 支持在启动时启用 embeddings 功能
+   - 在克隆和分析流程中传递 embeddings 选项
+
+**新增 API 端点：涉及文件(api.ts)**
+
+3. **`POST /api/repos/clone-analyze`** - 一键克隆并分析仓库
+   - 功能：接收 Git 仓库 URL，自动克隆到 `ginexus_code` 目录并执行分析
+   - 特性：
+     - 支持 token 认证和分支指定
+     - 流式响应（Server-Sent Events）实时返回进度
+     - 自动 UTF-8 编码转换
+     - 智能进度跟踪（克隆 0-5%，分析 5-95%）
+     - 处理目录已存在的情况（检查 registry 和 git 仓库状态）
+     - 支持 embeddings 选项
+   - 进度阶段：cloning → converting → Scanning files → Analysis complete
+
+4. **`POST /api/repos/zip-upload-analyze`** - ZIP 上传并分析
+   - 功能：接收 ZIP 文件，解压到 `ginexus_code/{zip名}_zip` 并执行分析
+   - 特性：
+     - 支持最大 500MB 的 ZIP 文件
+     - 自动处理单层目录结构（如 GitHub 下载的 zip）
+     - 自动 git init（ZIP 解压没有 .git 目录）
+     - 自动 UTF-8 编码转换
+     - 流式响应返回进度
+     - 支持 embeddings 选项
+
+5. **`GET/POST /api/proxy`** - Git 代理服务
+   - 功能：为 Web 端 Local Git 提供代理转发，解决跨域和鉴权问题
+   - 特性：
+     - 仅允许 http/https 协议
+     - 转发 Git 协议相关 headers（Authorization、Git-Protocol 等）
+     - 支持最大 50MB 的请求体
+     - 详细的日志记录（请求 URL、状态、大小）
+
+**其他改进：涉及文件(api.ts)**
+
+6. **数据库连接管理**
+   - 在分析完成后调用 `closeLbugForPath` 释放文件锁
+   - 避免后台服务持有数据库连接导致的问题
+
+7. **导入依赖扩展**
+   - 新增导入：`existsSync`, `spawnSync`, `spawn`, `readline`, `fileURLToPath`, `AdmZip`, `readRegistry`, `closeLbugForPath`, `isGitRepo`
+   - 支持文件系统操作、进程管理、ZIP 处理等功能
+
+8. **错误处理和日志**
+    - 更详细的错误处理（区分不同类型的错误）
+    - 过滤 stderr 中的噪音日志（如 @huggingface/transformers 的警告）
+    - 更完善的流式响应错误处理
+
+9. **路径处理工具函数**
+    - `getCodeBaseDir()`: 获取代码库基础目录（HOME 或当前工作目录）
+    - `getCodeDir()`: 获取代码目录（`ginexus_code`）
+    - `getRepoNameFromUrl()`: 从 URL 提取仓库名
+    - `pathEquals()`: 跨平台路径比较（Windows 大小写不敏感）
+
+#### 三、gitnexus/src/mcp/core
+
+**中文本地化支撑：(涉及文件embedder.ts)**
+
+1. 强制写死hf镜像站
+
+#### 四、gitnexus/src/cli
+
+**CLI 命令增强：涉及文件(index.ts, serve.ts, analyze.ts, skill-gen.ts)**
+
+1. **index.ts - 命令定义变更**
+   - **serve 命令增强**：
+     - 默认端口从 `4747` 改为 `6660`
+     - 新增 `--embeddings` 选项，支持在启动时启用 embeddings 功能
+
+2. **serve.ts - 服务启动增强**
+   - 新增 `embeddings` 选项支持
+   - 默认端口从 `4747` 改为 `6660`
+   - 将 `embeddings` 选项传递给 `createServer` 函数
+
+3. **analyze.ts - 分析命令增强**
+   - **进度输出模式（progressMode）**：
+     - 新增 JSON 格式的进度输出（通过 `GITNEXUS_PROGRESS` 环境变量启用）
+     - 支持 `filesProcessed` 和 `totalFiles` 字段，便于前端显示详细进度
+     - 在 progressMode 下，摘要信息输出到 stderr，避免与 stdout 的 JSON 混淆
+   - **进度百分比调整**：
+     - Pipeline: 0-50%（原版 0-60%）
+     - LadybugDB: 50-65%（原版 60-85%）
+     - FTS: 65-72%（原版 85-90%）
+     - Embeddings: 72-98%（原版 90-98%）
+     - Finalize: 98-100%（相同）
+   - **LadybugDB 阶段优化**：
+     - 使用固定的 phase 标签 "Loading into LadybugDB..."，避免动态消息导致阶段来回跳
+     - 改进进度计算逻辑，使用消息计数估算进度
+   - **错误处理优化**：
+     - 移除 lbug 警告消息中的 "(schema will be updated in next release)" 文本
+     - 改进 progressMode 下的错误输出格式
+
+4. **skill-gen.ts - 技能生成配置化**
+   - **配置管理功能**：
+     - 新增 `SkillConfig` 接口，定义技能生成配置结构
+     - 新增 `loadSkillConfig()` 函数，从 `.gitnexus/skill-config.json` 读取配置
+     - 配置文件不存在时自动创建默认配置
+     - 支持配置验证和错误处理
+   - **社区目录过滤配置化**：
+     - 新增 `excludedCommunityFolders` 配置项，允许自定义需要过滤的目录名
+     - 默认过滤列表扩展：`['src', 'lib', 'core', 'utils', 'common', 'shared', 'helpers', 'app', 'helper']`（原版只有前7个）
+     - `buildCommunitiesFromMemberships` 函数改为接收 `config` 参数，使用配置而非硬编码
+   - **配置文件位置**：`.gitnexus/skill-config.json`
+   - **配置文件格式**：
+     ```json
+     {
+       "excludedCommunityFolders": [
+         "src", "lib", "core", "utils", "common", "shared", "helpers", "app", "helper"
+       ]
+     }
+     ```
