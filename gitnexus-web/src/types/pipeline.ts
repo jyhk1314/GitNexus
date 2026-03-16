@@ -22,6 +22,7 @@ export interface PipelineResult {
   fileContents: Map<string, string>;
   communityResult?: CommunityDetectionResult;
   processResult?: ProcessDetectionResult;
+  lbugReady?: boolean; // Whether LadybugDB/KuzuDB was successfully loaded
 }
 
 // Serializable version for Web Worker communication
@@ -30,13 +31,15 @@ export interface SerializablePipelineResult {
   nodes: GraphNode[];
   relationships: GraphRelationship[];
   fileContents: Record<string, string>; // Object instead of Map
+  lbugReady?: boolean; // Whether LadybugDB/KuzuDB was successfully loaded
 }
 
 // Helper to convert PipelineResult to serializable format
-export const serializePipelineResult = (result: PipelineResult): SerializablePipelineResult => ({
+export const serializePipelineResult = (result: PipelineResult, lbugReady?: boolean): SerializablePipelineResult => ({
   nodes: result.graph.nodes,
   relationships: result.graph.relationships,
   fileContents: Object.fromEntries(result.fileContents),
+  lbugReady,
 });
 
 // Helper to reconstruct from serializable format (used in main thread)
@@ -51,6 +54,7 @@ export const deserializePipelineResult = (
   return {
     graph,
     fileContents: new Map(Object.entries(serialized.fileContents)),
+    lbugReady: serialized.lbugReady,
   };
 };
 

@@ -198,6 +198,7 @@ const workerApi = {
     } catch (err) {
       if (import.meta.env.DEV) {
         console.warn('LadybugDB load failed (vector search will be unavailable):', err);
+      }
     }
 
     // Store clustering config for background enrichment (runs after graph loads)

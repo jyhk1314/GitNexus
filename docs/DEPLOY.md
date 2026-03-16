@@ -15,7 +15,7 @@ cd d:\github\GitNexus\gitnexus; npm run build 2>&1
 |------|------|
 | **后台启动**（HTTP 服务，供 Web UI 连接） | `npx gitnexus serve --port 6660 --host 0.0.0.0` |
 | **后台启动（含向量搜索）** | `npx gitnexus serve --port 6660 --host 0.0.0.0 --embeddings` |
-| **前台启动**（开发模式，在 `gitnexus` 目录下） | `npm run dev -- --host 0.0.0.0` |
+| **前台启动**（开发模式，在 `gitnexus` 目录下） | `npm run dev -- --host 0.0.0.0 --port 5175` |
 
 **跨机访问**：使用 `--host 0.0.0.0` 时，服务会监听所有网卡，但本机防火墙可能拦截入站连接。若其他机器无法访问，请在**运行 serve 的那台机器**上放行对应端口的入站 TCP（例如 Windows：高级安全 Windows 防火墙 → 入站规则 → 新建规则 → 端口 → TCP 6660）。
 
