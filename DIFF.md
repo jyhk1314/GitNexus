@@ -50,10 +50,11 @@
 3. **ingestion/constants.ts - Tree-sitter缓冲区大小优化，从512KB提升到2MB，避免跳过较大文件**
 4. **ingestion/filesystem-walker.ts - 文件大小限制优化，从512KB提升到2MB**
 5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能**
-6. **ingestion/parsing-processor.ts - 进度优化**
+6. **ingestion/parsing-processor.ts - 进度优化, 解决C++构造函数识别成Function的问题**
 7. **ingestion/pipeline.ts - 进度优化**
 8. **lbug/csv-generator.ts - 文件截断大小优化**
 9. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明**
+10. **ingestion/workers/parse-worker.ts - 解决C++构造函数识别成Function的问题**
 
 #### 六、gitnexus-web/src/lib
 

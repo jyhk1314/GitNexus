@@ -12,6 +12,7 @@ import { typeConfigs } from './type-extractors/index.js';
 import { WorkerPool } from './workers/worker-pool.js';
 import type { ParseWorkerResult, ParseWorkerInput, ExtractedImport, ExtractedCall, ExtractedHeritage, ExtractedRoute, FileConstructorBindings } from './workers/parse-worker.js';
 import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from './constants.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
 
 export type FileProgressCallback = (current: number, total: number, filePath: string) => void;
 
@@ -176,6 +177,32 @@ const processParsingSequential = async (
       // Synthesize name for constructors without explicit @name capture (e.g. Swift init)
       if (!nameNode && !captureMap['definition.constructor']) return;
       const nodeName = nameNode ? nameNode.text : 'init';
+
+      // C++: skip constructor declarations parsed as Function nodes.
+      // In .h files, a constructor declaration inside a class body (e.g. "CZmdbAgentClientThread();")
+      // is captured as @definition.function with a bare identifier. When the identifier name matches
+      // the enclosing class_specifier name, it is a constructor declaration — skip it to avoid
+      // duplicating what the .cpp implementation already captures as a Method node.
+      if (
+        language === SupportedLanguages.CPlusPlus &&
+        captureMap['definition.function'] &&
+        nameNode
+      ) {
+        let isCppConstructorDecl = false;
+        let ancestor = nameNode.parent;
+        while (ancestor) {
+          if (ancestor.type === 'class_specifier') {
+            const classNameNode = ancestor.childForFieldName?.('name') ??
+              ancestor.children?.find((c: any) => c.type === 'type_identifier');
+            if (classNameNode && classNameNode.text === nodeName) {
+              isCppConstructorDecl = true;
+            }
+            break;
+          }
+          ancestor = ancestor.parent;
+        }
+        if (isCppConstructorDecl) return;
+      }
 
       let nodeLabel = 'CodeElement';
 

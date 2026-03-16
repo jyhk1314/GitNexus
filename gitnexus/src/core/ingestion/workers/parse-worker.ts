@@ -1023,6 +1023,33 @@ const processFileGroup = (
       // Synthesize name for constructors without explicit @name capture (e.g. Swift init)
       if (!nameNode && nodeLabel !== 'Constructor') continue;
       const nodeName = nameNode ? nameNode.text : 'init';
+
+      // C++: skip constructor declarations parsed as Function nodes.
+      // In .h files, a constructor declaration inside a class body (e.g. "CZmdbAgentClientThread();")
+      // is captured as @definition.function with a bare identifier. When the identifier name matches
+      // the enclosing class_specifier name, it is a constructor declaration — skip it to avoid
+      // duplicating what the .cpp implementation already captures as a Method node.
+      if (
+        language === SupportedLanguages.CPlusPlus &&
+        nodeLabel === 'Function' &&
+        captureMap['definition.function'] &&
+        nameNode
+      ) {
+        let isCppConstructorDecl = false;
+        let ancestor = nameNode.parent;
+        while (ancestor) {
+          if (ancestor.type === 'class_specifier') {
+            const classNameNode = ancestor.childForFieldName?.('name') ??
+              ancestor.children?.find((c: any) => c.type === 'type_identifier');
+            if (classNameNode && classNameNode.text === nodeName) {
+              isCppConstructorDecl = true;
+            }
+            break;
+          }
+          ancestor = ancestor.parent;
+        }
+        if (isCppConstructorDecl) continue;
+      }
       const definitionNode = getDefinitionNodeFromCaptures(captureMap);
       const startLine = definitionNode ? definitionNode.startPosition.row : (nameNode ? nameNode.startPosition.row : 0);
       const nodeId = generateId(nodeLabel, `${file.path}:${nodeName}`);
