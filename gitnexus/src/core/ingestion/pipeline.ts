@@ -282,7 +282,9 @@ export const runPipelineFromRepo = async (
           sequentialChunkPaths.push(chunkPaths);
         }
 
-        filesParsedSoFar += chunkFiles.length;
+        // Count actual parseable files processed in this chunk
+        const parseableCount = chunkFiles.filter(f => getLanguageFromFilename(f.path) !== null).length;
+        filesParsedSoFar += parseableCount;
 
         // Clear AST cache between chunks to free memory
         astCache.clear();

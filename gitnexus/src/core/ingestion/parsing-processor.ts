@@ -48,7 +48,7 @@ const processParsingWithWorkers = async (
 
   if (parseableFiles.length === 0) return { imports: [], calls: [], heritage: [], routes: [], constructorBindings: [] };
 
-  const total = files.length;
+  const total = parseableFiles.length;
 
   // Dispatch to worker pool — pool handles splitting into chunks and sub-batching
   const chunkResults = await workerPool.dispatch<ParseWorkerInput, ParseWorkerResult>(

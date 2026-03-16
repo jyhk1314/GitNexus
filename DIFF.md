@@ -50,6 +50,8 @@
 3. **ingestion/constants.ts - Tree-sitter缓冲区大小优化，从512KB提升到2MB，避免跳过较大文件**
 4. **ingestion/filesystem-walker.ts - 文件大小限制优化，从512KB提升到2MB**
 5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能**
+6. **ingestion/parsing-processor.ts - 进度优化**
+7. **ingestion/pipeline.ts - 进度优化**
 
 #### 六、gitnexus-web/src/lib
 
