@@ -525,14 +525,10 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
     },
     {
       name: 'read',
-      description: `Read the full content of a file. Use to see source code after finding files via search or grep.
-
-IMPORTANT: You MUST provide the "filePath" parameter. It cannot be empty.
-Example: read({"filePath": "src/utils.ts"}) or read({"filePath": "BackServiceCpp/src/cpp/Zmdb/OracleFlush/ZmdbLoadFromOra.h"})
-
+      description: `Read the full content of a file. Use to see source code after finding files via search or grep. must provide "filePath" parameter. 
 If you don't know the exact file path, use search() or grep() first to find files.`,
       schema: z.object({
-        filePath: z.string().optional().describe('File path to read (can be partial like "src/utils.ts"). REQUIRED - must provide a non-empty string. Use search() or grep() first if you don\'t know the exact path.'),
+        filePath: z.string().describe('File path to read (can be partial like "src/utils.ts")'),
       }),
     }
   );
