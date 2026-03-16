@@ -98,7 +98,7 @@ export const FILTERABLE_LABELS: NodeLabel[] = [
 ];
 
 // Edge/Relation types
-export type EdgeType = 'CONTAINS' | 'DEFINES' | 'IMPORTS' | 'CALLS' | 'EXTENDS' | 'IMPLEMENTS';
+export type EdgeType = 'CONTAINS' | 'DEFINES' | 'IMPORTS' | 'CALLS' | 'EXTENDS' | 'IMPLEMENTS' | 'HAS_METHOD';
 
 export const ALL_EDGE_TYPES: EdgeType[] = [
   'CONTAINS',
@@ -107,9 +107,10 @@ export const ALL_EDGE_TYPES: EdgeType[] = [
   'CALLS',
   'EXTENDS',
   'IMPLEMENTS',
+  'HAS_METHOD',
 ];
 
-// Default visible edges (CALLS hidden by default to reduce clutter)
+// Default visible edges (HAS_METHOD hidden by default to reduce clutter)
 export const DEFAULT_VISIBLE_EDGES: EdgeType[] = [
   'CONTAINS',
   'DEFINES',
@@ -127,4 +128,5 @@ export const EDGE_INFO: Record<EdgeType, { color: string; label: string }> = {
   CALLS: { color: '#7c3aed', label: 'Calls' },
   EXTENDS: { color: '#c2410c', label: 'Extends' },
   IMPLEMENTS: { color: '#be185d', label: 'Implements' },
+  HAS_METHOD: { color: '#f59e0b', label: 'Has Method' },
 };
