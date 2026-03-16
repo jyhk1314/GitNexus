@@ -231,7 +231,30 @@ const processParsingSequential = async (
 
       const definitionNodeForRange = getDefinitionNodeFromCaptures(captureMap);
       const startLine = definitionNodeForRange ? definitionNodeForRange.startPosition.row : (nameNode ? nameNode.startPosition.row : 0);
-      const nodeId = generateId(nodeLabel, `${file.path}:${nodeName}`);
+
+      // Compute enclosing class before generating nodeId so we can use it as the scope key.
+      // Function is included because Kotlin/Rust/Python capture class methods as Function nodes.
+      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
+      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNodeForRange, file.path) : null;
+
+      // C++: a Function node that has an enclosing class is actually a method (constructor, or member
+      // function captured via the top-level `declaration` rule). Promote it to Method so that the
+      // nodeId label matches the Method nodes captured from .cpp out-of-line definitions.
+      const effectiveLabel = (language === SupportedLanguages.CPlusPlus && nodeLabel === 'Function' && enclosingClassId)
+        ? 'Method'
+        : nodeLabel;
+
+      // C++ class/struct: use filePath-free id (just the class name) so that the class node id
+      // matches the filePath-free enclosingClassId extracted from out-of-line method definitions.
+      const isCppClassDef = language === SupportedLanguages.CPlusPlus
+        && (effectiveLabel === 'Class' || effectiveLabel === 'Struct');
+
+      // When a method belongs to a class, use the class id as scope instead of filePath so that
+      // declarations in .h and definitions in .cpp merge into the same graph node.
+      const nodeIdScope = enclosingClassId ?? file.path;
+      const nodeId = isCppClassDef
+        ? generateId(effectiveLabel, nodeName)
+        : generateId(effectiveLabel, `${nodeIdScope}:${nodeName}`);
 
       const definitionNode = getDefinitionNodeFromCaptures(captureMap);
       const frameworkHint = definitionNode
@@ -239,7 +262,7 @@ const processParsingSequential = async (
         : null;
 
       // Extract method signature for Method/Constructor nodes
-      const methodSig = (nodeLabel === 'Function' || nodeLabel === 'Method' || nodeLabel === 'Constructor')
+      const methodSig = (effectiveLabel === 'Function' || effectiveLabel === 'Method' || effectiveLabel === 'Constructor')
         ? extractMethodSignature(definitionNode)
         : undefined;
 
@@ -253,7 +276,7 @@ const processParsingSequential = async (
 
       const node: GraphNode = {
         id: nodeId,
-        label: nodeLabel as any,
+        label: effectiveLabel as any,
         properties: {
           name: nodeName,
           filePath: file.path,
@@ -274,12 +297,7 @@ const processParsingSequential = async (
 
       graph.addNode(node);
 
-      // Compute enclosing class for Method/Constructor/Property/Function — used for both ownerId and HAS_METHOD
-      // Function is included because Kotlin/Rust/Python capture class methods as Function nodes
-      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
-      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNodeForRange, file.path) : null;
-
-      symbolTable.add(file.path, nodeName, nodeId, nodeLabel, {
+      symbolTable.add(file.path, nodeName, nodeId, effectiveLabel, {
         parameterCount: methodSig?.parameterCount,
         returnType: methodSig?.returnType,
         ownerId: enclosingClassId ?? undefined,

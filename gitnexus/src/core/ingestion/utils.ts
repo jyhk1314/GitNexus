@@ -296,8 +296,25 @@ export const CONTAINER_TYPE_TO_LABEL: Record<string, string> = {
 };
 
 /** Walk up AST to find enclosing class/struct/interface/impl, return its generateId or null.
- *  For Go method_declaration nodes, extracts receiver type (e.g. `func (u *User) Save()` → User struct). */
+ *  For Go method_declaration nodes, extracts receiver type (e.g. `func (u *User) Save()` → User struct).
+ *  For C++ out-of-line definitions (ClassName::method), extracts the scope from qualified_identifier
+ *  and returns a filePath-free id so that .h declarations and .cpp definitions share the same class node. */
 export const findEnclosingClassId = (node: any, filePath: string): string | null => {
+  // C++: out-of-line method definition — name node sits inside a qualified_identifier.
+  // e.g. `void MyClass::foo() {}` → nameNode.parent = qualified_identifier, scope = MyClass.
+  // We cannot know which .h file defines the class, so we use a filePath-free id that matches
+  // the id generated for the class declaration (see CPP class nodeId generation below).
+  if (node && node.parent?.type === 'qualified_identifier') {
+    const qi = node.parent;
+    // scope is the leftmost type_identifier child (before ::)
+    const scopeNode = qi.children?.find((c: any) =>
+      c.type === 'type_identifier' || c.type === 'identifier' || c.type === 'namespace_identifier'
+    );
+    if (scopeNode) {
+      return generateId('Class', scopeNode.text);
+    }
+  }
+
   let current = node.parent;
   while (current) {
     // Go: method_declaration has a receiver parameter with the struct type

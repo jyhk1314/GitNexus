@@ -668,7 +668,8 @@ export const processRoutesFromExtracted = async (
     const sourceId = generateId('File', route.filePath);
 
     if (!methodId) {
-      const guessedId = generateId('Method', `${controllerDef.filePath}:${route.methodName}`);
+      // Use controller's nodeId as scope to match the merged nodeId scheme (class-scoped, not file-scoped).
+      const guessedId = generateId('Method', `${controllerDef.nodeId}:${route.methodName}`);
       const relId = generateId('CALLS', `${sourceId}:route->${guessedId}`);
       graph.addRelationship({
         id: relId,

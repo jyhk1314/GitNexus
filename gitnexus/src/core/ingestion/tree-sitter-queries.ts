@@ -300,8 +300,20 @@ export const CPP_QUERIES = `
 (declaration declarator: (function_declarator declarator: (identifier) @name)) @definition.function
 (declaration declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
 
-; Inline class method declarations (inside class body, no body: void Foo();)
-(field_declaration declarator: (function_declarator declarator: (identifier) @name)) @definition.method
+; Inline class method declarations (inside class body, no body)
+; Covers: void foo(); / virtual void foo(); / static void foo(); / int getValue() const; / bool operator==(...);
+; Note: field_identifier is the actual name node type for class members in tree-sitter-cpp
+(field_declaration declarator: (function_declarator
+  declarator: [(field_identifier) (identifier) (operator_name)] @name)) @definition.method
+
+; Inline class method declarations returning pointer: int* foo();
+(field_declaration declarator: (pointer_declarator declarator: (function_declarator
+  declarator: [(field_identifier) (identifier)] @name))) @definition.method
+
+; Destructor declarations inside class body: ~MyClass();
+; (destructor_name never appears at file scope, so no conflict with top-level declaration rule)
+(declaration declarator: (function_declarator
+  declarator: (destructor_name) @name)) @definition.method
 
 ; Inline class method definitions (inside class body, with body: void Foo() { ... })
 (field_declaration_list

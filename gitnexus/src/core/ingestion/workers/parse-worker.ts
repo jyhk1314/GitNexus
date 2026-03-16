@@ -193,7 +193,10 @@ const findEnclosingFunctionId = (node: any, filePath: string): string | null => 
     if (FUNCTION_NODE_TYPES.has(current.type)) {
       const { funcName, label } = extractFunctionName(current);
       if (funcName) {
-        return generateId(label, `${filePath}:${funcName}`);
+        // Use the same scope key as nodeId generation: class id when available, filePath otherwise.
+        const enclosingClassId = findEnclosingClassId(current, filePath);
+        const scope = enclosingClassId ?? filePath;
+        return generateId(label, `${scope}:${funcName}`);
       }
     }
     current = current.parent;
@@ -1052,7 +1055,31 @@ const processFileGroup = (
       }
       const definitionNode = getDefinitionNodeFromCaptures(captureMap);
       const startLine = definitionNode ? definitionNode.startPosition.row : (nameNode ? nameNode.startPosition.row : 0);
-      const nodeId = generateId(nodeLabel, `${file.path}:${nodeName}`);
+
+      // Compute enclosing class before generating nodeId so we can use it as the scope key.
+      // Function is included because Kotlin/Rust/Python capture class methods as Function nodes.
+      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
+      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path) : null;
+
+      // C++: a Function node that has an enclosing class is actually a method (constructor, or member
+      // function captured via the top-level `declaration` rule). Promote it to Method so that the
+      // nodeId label matches the Method nodes captured from .cpp out-of-line definitions.
+      const effectiveLabel = (language === SupportedLanguages.CPlusPlus && nodeLabel === 'Function' && enclosingClassId)
+        ? 'Method'
+        : nodeLabel;
+
+      // C++ class/struct: use filePath-free id (just the class name) so that the class node id
+      // matches the filePath-free enclosingClassId extracted from out-of-line method definitions.
+      // For all other languages, keep the filePath-scoped id for uniqueness.
+      const isCppClassDef = language === SupportedLanguages.CPlusPlus
+        && (effectiveLabel === 'Class' || effectiveLabel === 'Struct');
+
+      // When a method belongs to a class, use the class id as scope instead of filePath so that
+      // declarations in .h and definitions in .cpp merge into the same graph node.
+      const nodeIdScope = enclosingClassId ?? file.path;
+      const nodeId = isCppClassDef
+        ? generateId(effectiveLabel, nodeName)
+        : generateId(effectiveLabel, `${nodeIdScope}:${nodeName}`);
 
       let description: string | undefined;
       if (language === SupportedLanguages.PHP) {
@@ -1069,7 +1096,7 @@ const processFileGroup = (
 
       let parameterCount: number | undefined;
       let returnType: string | undefined;
-      if (nodeLabel === 'Function' || nodeLabel === 'Method' || nodeLabel === 'Constructor') {
+      if (effectiveLabel === 'Function' || effectiveLabel === 'Method' || effectiveLabel === 'Constructor') {
         const sig = extractMethodSignature(definitionNode);
         parameterCount = sig.parameterCount;
         returnType = sig.returnType;
@@ -1085,7 +1112,7 @@ const processFileGroup = (
 
       result.nodes.push({
         id: nodeId,
-        label: nodeLabel,
+        label: effectiveLabel,
         properties: {
           name: nodeName,
           filePath: file.path,
@@ -1103,16 +1130,11 @@ const processFileGroup = (
         },
       });
 
-      // Compute enclosing class for Method/Constructor/Property/Function — used for both ownerId and HAS_METHOD
-      // Function is included because Kotlin/Rust/Python capture class methods as Function nodes
-      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
-      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path) : null;
-
       result.symbols.push({
         filePath: file.path,
         name: nodeName,
         nodeId,
-        type: nodeLabel,
+        type: effectiveLabel,
         ...(parameterCount !== undefined ? { parameterCount } : {}),
         ...(returnType !== undefined ? { returnType } : {}),
         ...(enclosingClassId ? { ownerId: enclosingClassId } : {}),
