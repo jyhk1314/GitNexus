@@ -59,6 +59,7 @@ const PHASE_LABELS: Record<string, string> = {
   parsing: 'Parsing code',
   imports: 'Resolving imports',
   calls: 'Tracing calls',
+  routes: 'Tracing calls',
   heritage: 'Extracting inheritance',
   communities: 'Detecting communities',
   processes: 'Detecting processes',
@@ -163,10 +164,15 @@ export const analyzeCommand = async (
   }
 
   /** Update progress: in progressMode output JSON line for API/SSE; else update bar. */
-  const updateBar = (value: number, phaseLabel: string) => {
+  const updateBar = (value: number, phaseLabel: string, filesProcessed?: number, totalFiles?: number) => {
     if (phaseLabel !== lastPhaseLabel) { lastPhaseLabel = phaseLabel; phaseStart = Date.now(); }
     if (progressMode) {
-      process.stdout.write(JSON.stringify({ phase: phaseLabel, percent: value }) + '\n');
+      const progressData: any = { phase: phaseLabel, percent: value };
+      if (filesProcessed !== undefined && totalFiles !== undefined) {
+        progressData.filesProcessed = filesProcessed;
+        progressData.totalFiles = totalFiles;
+      }
+      process.stdout.write(JSON.stringify(progressData) + '\n');
     } else if (bar) {
       const elapsed = Math.round((Date.now() - phaseStart) / 1000);
       const display = elapsed >= 3 ? `${phaseLabel} (${elapsed}s)` : phaseLabel;
@@ -193,15 +199,18 @@ export const analyzeCommand = async (
     }
   }
 
-  // ── Phase 1: Full Pipeline (0–60%) ─────────────────────────────────
+  // ── Phase 1: Full Pipeline (0–50%) ─────────────────────────────────
   const pipelineResult = await runPipelineFromRepo(repoPath, (progress) => {
     const phaseLabel = PHASE_LABELS[progress.phase] || progress.phase;
-    const scaled = Math.round(progress.percent * 0.6);
-    updateBar(scaled, phaseLabel);
+    const scaled = Math.round(progress.percent * 0.5);
+    // 传递文件数量信息（如果可用）
+    const filesProcessed = progress.stats?.filesProcessed;
+    const totalFiles = progress.stats?.totalFiles;
+    updateBar(scaled, phaseLabel, filesProcessed, totalFiles);
   });
 
-  // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────────
-  updateBar(60, 'Loading into LadybugDB...');
+  // ── Phase 2: LadybugDB (50–65%) ──────────────────────────────────────
+  updateBar(50, 'Loading into LadybugDB...');
 
   await closeLbug();
   const lbugFiles = [lbugPath, `${lbugPath}.wal`, `${lbugPath}.lock`];
@@ -212,16 +221,18 @@ export const analyzeCommand = async (
   const t0Lbug = Date.now();
   await initLbug(lbugPath);
   let lbugMsgCount = 0;
+  // 统一使用固定的 phase，避免动态消息导致阶段来回跳
   const lbugResult = await loadGraphToLbug(pipelineResult.graph, pipelineResult.repoPath, storagePath, (msg) => {
     lbugMsgCount++;
-    const progress = Math.min(84, 60 + Math.round((lbugMsgCount / (lbugMsgCount + 10)) * 24));
-    updateBar(progress, msg);
+    const progress = Math.min(64, 50 + Math.round((lbugMsgCount / (lbugMsgCount + 10)) * 14));
+    // 统一使用 "Loading into LadybugDB..." 作为 phase，msg 仅用于日志
+    updateBar(progress, 'Loading into LadybugDB...');
   });
   const lbugTime = ((Date.now() - t0Lbug) / 1000).toFixed(1);
   const lbugWarnings = lbugResult.warnings;
 
-  // ── Phase 3: FTS (85–90%) ─────────────────────────────────────────
-  updateBar(85, 'Creating search indexes...');
+  // ── Phase 3: FTS (65–72%) ─────────────────────────────────────────
+  updateBar(65, 'Creating search indexes...');
 
   const t0Fts = Date.now();
   try {
@@ -237,7 +248,7 @@ export const analyzeCommand = async (
 
   // ── Phase 3.5: Re-insert cached embeddings ────────────────────────
   if (cachedEmbeddings.length > 0) {
-    updateBar(88, `Restoring ${cachedEmbeddings.length} cached embeddings...`);
+    updateBar(70, `Restoring ${cachedEmbeddings.length} cached embeddings...`);
     const EMBED_BATCH = 200;
     for (let i = 0; i < cachedEmbeddings.length; i += EMBED_BATCH) {
       const batch = cachedEmbeddings.slice(i, i + EMBED_BATCH);
@@ -251,7 +262,7 @@ export const analyzeCommand = async (
     }
   }
 
-  // ── Phase 4: Embeddings (90–98%) ──────────────────────────────────
+  // ── Phase 4: Embeddings (72–98%) ──────────────────────────────────
   const stats = await getLbugStats();
   let embeddingTime = '0.0';
   let embeddingSkipped = true;
@@ -266,7 +277,7 @@ export const analyzeCommand = async (
   }
 
   if (!embeddingSkipped) {
-    updateBar(90, 'Loading embedding model...');
+    updateBar(72, 'Loading embedding model...');
     if (progressMode) process.stderr.write('[embedding] Loading model and generating embeddings...\n');
     const t0Emb = Date.now();
     const { runEmbeddingPipeline } = await import('../core/embeddings/embedding-pipeline.js');
@@ -274,7 +285,7 @@ export const analyzeCommand = async (
       executeQuery,
       executeWithReusedStatement,
       (progress) => {
-        const scaled = 90 + Math.round((progress.percent / 100) * 8);
+        const scaled = 72 + Math.round((progress.percent / 100) * 26);
         const label = progress.phase === 'loading-model' ? 'Loading embedding model...' : `Embedding ${progress.nodesProcessed || 0}/${progress.totalNodes || '?'}`;
         updateBar(scaled, label);
       },

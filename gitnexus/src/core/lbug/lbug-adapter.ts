@@ -597,6 +597,17 @@ export const closeLbug = async (): Promise<void> => {
   ftsLoaded = false;
 };
 
+/**
+ * Close database connection if it matches the given path.
+ * This is useful for releasing file locks after analyze completes.
+ */
+export const closeLbugForPath = async (dbPath: string): Promise<void> => {
+  const normalizedPath = path.resolve(dbPath);
+  if (currentDbPath && path.resolve(currentDbPath) === normalizedPath) {
+    await closeLbug();
+  }
+};
+
 export const isLbugReady = (): boolean => conn !== null && db !== null;
 
 

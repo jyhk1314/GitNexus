@@ -36,7 +36,7 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
   const [showToken, setShowToken] = useState(false);
   const [showLocalToken, setShowLocalToken] = useState(false);
   const [isCloning, setIsCloning] = useState(false);
-  const [cloneProgress, setCloneProgress] = useState({ phase: '', percent: 0 });
+  const [cloneProgress, setCloneProgress] = useState<{ phase: string; percent: number; filesProcessed?: number; totalFiles?: number }>({ phase: '', percent: 0 });
   const [error, setError] = useState<string | null>(null);
 
   // Server tab state：优先从 URL 参数 server/repo 取默认值（默认 server 访问模式）
@@ -207,8 +207,13 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
         proxyTrimmed,
         localGitUrl,
         localGitToken.trim() || undefined,
-        (phase, percent) => {
-          setCloneProgress({ phase, percent });
+        (phaseRaw, percent) => {
+          // 解析 phase|filesProcessed|totalFiles 格式
+          const fileMatch = phaseRaw.match(/^(.+)\|(\d+)\|(\d+)$/);
+          const phase = fileMatch ? fileMatch[1] : phaseRaw;
+          const filesProcessed = fileMatch ? parseInt(fileMatch[2], 10) : undefined;
+          const totalFiles = fileMatch ? parseInt(fileMatch[3], 10) : undefined;
+          setCloneProgress({ phase, percent, filesProcessed, totalFiles });
           if (phase === 'already_exists') {
             receivedAlreadyExists = true;
           }
@@ -636,7 +641,7 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
                     {cloneProgress.phase === 'cloning'
-                      ? `Cloning... ${cloneProgress.percent}%`
+                      ? `Cloning... ${cloneProgress.percent.toFixed(1)}%`
                       : cloneProgress.phase === 'reading'
                         ? 'Reading files...'
                         : 'Starting...'
@@ -808,15 +813,77 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
                 {isCloning ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    {cloneProgress.phase === 'already_exists'
-                      ? '仓库已存在，正在连接…'
-                      : cloneProgress.phase === 'cloning' || cloneProgress.phase === 'converting'
-                        ? `正在克隆... ${cloneProgress.percent}%`
-                        : cloneProgress.phase === 'analyzing' || cloneProgress.phase === 'Scanning files' || cloneProgress.phase === 'Building structure' || cloneProgress.phase === 'Parsing code'
-                          ? `正在分析代码... ${cloneProgress.percent}%`
-                          : cloneProgress.phase === 'Loading embedding model...' || cloneProgress.phase === 'loading-model' || cloneProgress.phase.startsWith('Embedding')
-                            ? `正在生成向量... ${cloneProgress.percent}%`
-                            : `克隆并分析中 ${cloneProgress.percent}%`}
+                    {(() => {
+                      const phase = cloneProgress.phase;
+                      // 阶段映射：按优先级从高到低匹配
+                      if (phase === 'already_exists') {
+                        return '仓库已存在，正在连接…';
+                      }
+                      // Clone 阶段
+                      if (phase === 'cloning') {
+                        return `正在克隆... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // UTF-8 转换阶段（克隆完成后）
+                      if (phase === 'converting') {
+                        return `正在转换编码... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 向量相关阶段（优先级高于通用分析阶段）
+                      if (phase === 'Loading embedding model...' || phase === 'loading-model') {
+                        return `正在加载向量模型... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      if (phase.startsWith('Embedding')) {
+                        const match = phase.match(/Embedding\s+(\d+)\/(\d+)/);
+                        if (match) {
+                          const [, processed, total] = match;
+                          return `正在生成向量... ${processed}/${total} 个节点 (${cloneProgress.percent.toFixed(1)}%)`;
+                        }
+                        return `正在生成向量... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 数据库加载阶段
+                      if (phase === 'Loading into LadybugDB...' || phase.includes('LadybugDB')) {
+                        return `正在加载到数据库... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 索引创建阶段
+                      if (phase === 'Creating search indexes...' || phase.includes('search indexes')) {
+                        return `正在创建搜索索引... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 恢复缓存向量阶段
+                      if (phase.includes('Restoring') && phase.includes('cached embeddings')) {
+                        return `正在恢复缓存的向量... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 保存元数据阶段
+                      if (phase === 'Saving metadata...') {
+                        return `正在保存元数据... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 生成技能文件阶段
+                      if (phase.includes('Generating skill files')) {
+                        return `正在生成技能文件... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 缓存向量阶段
+                      if (phase === 'Caching embeddings...') {
+                        return `正在缓存向量... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 通用分析阶段（pipeline 相关）
+                      if (
+                        phase === 'analyzing' ||
+                        phase === 'Scanning files' ||
+                        phase === 'Building structure' ||
+                        phase === 'Parsing code' ||
+                        phase === 'Resolving imports' ||
+                        phase === 'Tracing calls' ||
+                        phase === 'Extracting inheritance' ||
+                        phase === 'Detecting communities' ||
+                        phase === 'Detecting processes' ||
+                        phase === 'Pipeline complete'
+                      ) {
+                        if (cloneProgress.filesProcessed !== undefined && cloneProgress.totalFiles) {
+                          return `正在分析代码... ${cloneProgress.filesProcessed}/${cloneProgress.totalFiles} 个文件 (${cloneProgress.percent.toFixed(1)}%)`;
+                        }
+                        return `正在分析代码... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
+                      // 默认显示
+                      return `分析中... ${cloneProgress.percent.toFixed(1)}%`;
+                    })()}
                   </>
                 ) : (
                   <>
@@ -832,9 +899,24 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
                 <div className="h-2 bg-elevated rounded-full overflow-hidden">
                   <div
                     className="h-full bg-accent transition-all duration-300 ease-out"
-                    style={{ width: `${cloneProgress.percent}%` }}
+                    style={{
+                      width: `${
+                        cloneProgress.filesProcessed !== undefined && cloneProgress.totalFiles
+                          ? Math.max(
+                              cloneProgress.percent,
+                              // 文件进度映射到总进度 5-50% 区间，让进度条在 pipeline 阶段平滑推进
+                              5 + Math.round((cloneProgress.filesProcessed / cloneProgress.totalFiles) * 45)
+                            )
+                          : cloneProgress.percent
+                      }%`
+                    }}
                   />
                 </div>
+                {cloneProgress.filesProcessed !== undefined && cloneProgress.totalFiles ? (
+                  <p className="mt-1 text-xs text-text-muted text-center">
+                    {cloneProgress.filesProcessed} / {cloneProgress.totalFiles} 个文件
+                  </p>
+                ) : null}
               </div>
             )}
 

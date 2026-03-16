@@ -18,7 +18,7 @@ import * as readline from 'readline';
 import { fileURLToPath } from 'url';
 import AdmZip from 'adm-zip';
 import { loadMeta, listRegisteredRepos, readRegistry } from '../storage/repo-manager.js';
-import { executeQuery, closeLbug, withLbugDb } from '../core/lbug/lbug-adapter.js';
+import { executeQuery, closeLbug, closeLbugForPath, withLbugDb } from '../core/lbug/lbug-adapter.js';
 import { NODE_TABLES } from '../core/lbug/schema.js';
 import { GraphNode, GraphRelationship } from '../core/graph/types.js';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
@@ -180,7 +180,44 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
   };
 
   app.post('/api/repos/clone-analyze', async (req, res) => {
-    // 立即建立流式响应连接，避免前端长时间等待
+    // 先进行所有错误检查，再设置流式响应 headers
+    const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : undefined;
+    const branch = typeof req.body?.branch === 'string' ? req.body.branch.trim() : undefined;
+    
+    // 错误检查：在设置流式响应之前完成
+    if (!url) {
+      res.status(400).json({ error: 'Missing url in body. Example: { "url": "https://host/org/repo.git", "token": "optional", "branch": "optional" }' });
+      return;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      res.status(400).json({ error: 'Invalid URL' });
+      return;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      res.status(400).json({ error: 'Only http/https URLs are allowed' });
+      return;
+    }
+    const repoName = getRepoNameFromUrl(url);
+    if (!repoName) {
+      res.status(400).json({ error: 'Could not get repo name from URL' });
+      return;
+    }
+    const codeDir = getCodeDir();
+    // 若指定了分支，目录名加上分支后缀，避免同一仓库不同分支互相覆盖
+    const dirSuffix = branch ? `_${branch.replace(/[^a-zA-Z0-9_\-]/g, '_')}` : '';
+    const targetPath = path.resolve(codeDir, repoName + dirSuffix);
+
+    const entries = await readRegistry();
+    if (entries.some((e) => pathEquals(e.path, targetPath))) {
+      res.json({ ok: true, alreadyExists: true, path: targetPath, message: 'Repo already in registry, skip clone' });
+      return;
+    }
+
+    // 所有错误检查通过后，再建立流式响应连接
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -195,39 +232,6 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
     };
 
     try {
-      const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
-      const token = typeof req.body?.token === 'string' ? req.body.token.trim() : undefined;
-      const branch = typeof req.body?.branch === 'string' ? req.body.branch.trim() : undefined;
-      if (!url) {
-        res.status(400).json({ error: 'Missing url in body. Example: { "url": "https://host/org/repo.git", "token": "optional", "branch": "optional" }' });
-        return;
-      }
-      let parsed: URL;
-      try {
-        parsed = new URL(url);
-      } catch {
-        res.status(400).json({ error: 'Invalid URL' });
-        return;
-      }
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        res.status(400).json({ error: 'Only http/https URLs are allowed' });
-        return;
-      }
-      const repoName = getRepoNameFromUrl(url);
-      if (!repoName) {
-        res.status(400).json({ error: 'Could not get repo name from URL' });
-        return;
-      }
-      const codeDir = getCodeDir();
-      // 若指定了分支，目录名加上分支后缀，避免同一仓库不同分支互相覆盖
-      const dirSuffix = branch ? `_${branch.replace(/[^a-zA-Z0-9_\-]/g, '_')}` : '';
-      const targetPath = path.resolve(codeDir, repoName + dirSuffix);
-
-      const entries = await readRegistry();
-      if (entries.some((e) => pathEquals(e.path, targetPath))) {
-        res.json({ ok: true, alreadyExists: true, path: targetPath, message: 'Repo already in registry, skip clone' });
-        return;
-      }
 
       await fs.mkdir(codeDir, { recursive: true });
 
@@ -250,22 +254,48 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       });
 
       let cloneOutput = '';
-      let cloneStartTime = Date.now();
+      const cloneStartTime = Date.now();
+      // 克隆阶段占总进度 0-5%，以 300 秒为满估算时间进度（单调递增）
+      const CLONE_TIMEOUT_S = 300;
+      let lastClonePercent = 0;
+
+      const calcTimePercent = () => {
+        const elapsed = (Date.now() - cloneStartTime) / 1000;
+        // 对数曲线：前期增长快，后期趋缓，最高到 4.8（留 0.2 给完成跳 5）
+        const ratio = Math.min(elapsed / CLONE_TIMEOUT_S, 0.99);
+        return Math.round(-Math.log(1 - ratio) / -Math.log(1 - 0.99) * 48) / 10; // 0-4.8
+      };
+
       const cloneHeartbeatInterval = setInterval(() => {
-        const elapsed = Math.round((Date.now() - cloneStartTime) / 1000);
-        send({ type: 'progress', phase: 'cloning', percent: 1, detail: `Cloning... (${elapsed}s)` });
-      }, 2000); // 每2秒发送一次心跳
+        const timePct = calcTimePercent();
+        if (timePct > lastClonePercent) {
+          lastClonePercent = timePct;
+          const elapsed = Math.round((Date.now() - cloneStartTime) / 1000);
+          send({ type: 'progress', phase: 'cloning', percent: lastClonePercent, detail: `Cloning... (${elapsed}s)` });
+        }
+      }, 1000); // 每秒更新一次
+
+      const handleCloneProgress = (output: string) => {
+        // git clone --progress 输出类似 "Receiving objects: 50% (100/200)" 的进度
+        // 若有真实 git 百分比，与时间估算取较大值，确保单调递增
+        const progressMatch = output.match(/(\d+)%/);
+        if (progressMatch) {
+          const rawPct = parseInt(progressMatch[1], 10);
+          const gitMapped = rawPct / 100 * 4.8; // git 0-100% → 0-4.8
+          const timePct = calcTimePercent();
+          const best = Math.max(gitMapped, timePct);
+          if (best > lastClonePercent) {
+            lastClonePercent = best;
+            send({ type: 'progress', phase: 'cloning', percent: lastClonePercent });
+          }
+        }
+      };
 
       if (cloneProcess.stdout) {
         cloneProcess.stdout.on('data', (chunk) => {
           const output = chunk.toString('utf-8');
           cloneOutput += output;
-          // git clone --progress 会输出类似 "Receiving objects: 50% (100/200)" 的进度
-          const progressMatch = output.match(/(\d+)%/);
-          if (progressMatch) {
-            const percent = Math.min(3, parseInt(progressMatch[1], 10) / 100); // clone阶段占0-3%
-            send({ type: 'progress', phase: 'cloning', percent, detail: output.trim() });
-          }
+          handleCloneProgress(output);
         });
       }
 
@@ -273,12 +303,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         cloneProcess.stderr.on('data', (chunk) => {
           const output = chunk.toString('utf-8');
           cloneOutput += output;
-          // git clone --progress 的进度信息也会输出到stderr
-          const progressMatch = output.match(/(\d+)%/);
-          if (progressMatch) {
-            const percent = Math.min(3, parseInt(progressMatch[1], 10) / 100);
-            send({ type: 'progress', phase: 'cloning', percent, detail: output.trim() });
-          }
+          // git clone --progress 的进度信息也会输出到 stderr
+          handleCloneProgress(output);
         });
       }
 
@@ -329,8 +355,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         });
       });
 
-      // UTF-8转换阶段
-      send({ type: 'progress', phase: 'converting', percent: 3 });
+      // UTF-8转换阶段：percent 跟随克隆完成时的实际进度
+      send({ type: 'progress', phase: 'converting', percent: Math.max(lastClonePercent, 5) });
       const __dirnameServer = path.dirname(fileURLToPath(import.meta.url));
       const pkgRoot = path.resolve(__dirnameServer, '../..');
       const scriptCandidates = [
@@ -367,7 +393,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       }
 
       console.log('[clone-analyze] -> starting analyze');
-      send({ type: 'progress', phase: 'analyzing', percent: 5 });
+      send({ type: 'progress', phase: 'Scanning files', percent: 5 });
 
       const cliPath = path.join(__dirnameServer, '../cli/index.js');
       const nodeOptions = (process.env.NODE_OPTIONS || '').trim();
@@ -390,6 +416,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       let doneSent = false;
       let lastPhase = '';
       let lastPercent = -1;
+      let lastFilesProcessed: number | undefined = undefined;
+      let lastTotalFiles: number | undefined = undefined;
       const finishResponse = () => {
         if (doneSent) return;
         doneSent = true;
@@ -417,22 +445,29 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
           } else {
             const phase = data.phase ?? '';
             const percent = typeof data.percent === 'number' ? data.percent : 0;
+            const filesProcessed = typeof data.filesProcessed === 'number' ? data.filesProcessed : undefined;
+            const totalFiles = typeof data.totalFiles === 'number' ? data.totalFiles : undefined;
             // 将analyze的进度映射到5-95%范围（clone占0-5%，analyze占5-95%）
             // analyze.ts内部进度：pipeline(0-60%), lbug(60-85%), fts(85-90%), embedding(90-98%), finalize(98-100%)
             // 映射到：pipeline(5-59%), lbug(59-82.5%), fts(82.5-86%), embedding(86-93.2%), finalize(93.2-95%)
             const mappedPercent = 5 + Math.round(percent * 0.9);
-            if (phase !== lastPhase || mappedPercent !== lastPercent) {
+            // 检查是否有变化：phase、percent 或文件数量
+            const phaseChanged = phase !== lastPhase;
+            const percentChanged = mappedPercent !== lastPercent;
+            const filesChanged = filesProcessed !== lastFilesProcessed || totalFiles !== lastTotalFiles;
+            if (phaseChanged || percentChanged || filesChanged) {
               lastPhase = phase;
               lastPercent = mappedPercent;
-              send({ type: 'progress', phase, percent: mappedPercent });
+              lastFilesProcessed = filesProcessed;
+              lastTotalFiles = totalFiles;
+              const progressData: any = { type: 'progress', phase, percent: mappedPercent };
+              if (filesProcessed !== undefined) progressData.filesProcessed = filesProcessed;
+              if (totalFiles !== undefined) progressData.totalFiles = totalFiles;
+              send(progressData);
             }
           }
         } catch {
-          if (trimmed !== lastPhase || 0 !== lastPercent) {
-            lastPhase = trimmed;
-            lastPercent = 5;
-            send({ type: 'progress', phase: trimmed, percent: 5 });
-          }
+          // 非 JSON 行（如 "GitNexus Analyzer" 标题、空行等）直接忽略，不作为进度发出
         }
       });
       child.stderr?.on('data', (chunk) => {
@@ -442,9 +477,18 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
           process.stderr.write('[clone-analyze] ' + msg);
         }
       });
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
         console.log('[clone-analyze] analyze exit code:', code, targetPath);
         rl.close();
+        // 关闭后台服务对该数据库的连接，释放文件锁
+        // analyze 子进程已经关闭了自己的连接，但后台服务可能仍然持有连接
+        try {
+          const { getStoragePaths } = await import('../storage/repo-manager.js');
+          const { lbugPath } = getStoragePaths(targetPath);
+          await closeLbugForPath(lbugPath);
+        } catch (err) {
+          // 忽略错误，可能数据库路径不存在或已关闭
+        }
         if (!doneSent) {
           if (code === 0) send({ type: 'done', ok: true, path: targetPath });
           else send({ type: 'done', ok: false, error: 'Analyze exited with code ' + code });
@@ -458,11 +502,13 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       });
     } catch (err: any) {
       console.error('[clone-analyze]', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err?.message || String(err) });
-      } else {
+      // 如果 headers 已经发送（流式响应已建立），使用 send 发送错误
+      // 否则使用 JSON 响应
+      if (res.headersSent) {
         send({ type: 'done', ok: false, error: err?.message || String(err) });
         res.end();
+      } else {
+        res.status(500).json({ error: err?.message || String(err) });
       }
     }
   });

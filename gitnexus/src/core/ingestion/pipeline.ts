@@ -216,17 +216,19 @@ export const runPipelineFromRepo = async (
           workerPool,
         );
 
-        const chunkBasePercent = 20 + ((filesParsedSoFar / totalParseable) * 62);
+        // 本 chunk 解析完成后，filesParsedSoFar 尚未更新，先算出本 chunk 完成后的进度
+        const chunkEndFiles = filesParsedSoFar + chunkFiles.length;
+        const chunkEndPercent = 20 + ((chunkEndFiles / totalParseable) * 62);
 
         if (chunkWorkerData) {
           // Imports
           await processImportsFromExtracted(graph, allPathObjects, chunkWorkerData.imports, ctx, (current, total) => {
             onProgress({
-              phase: 'parsing',
-              percent: Math.round(chunkBasePercent),
+              phase: 'imports',
+              percent: Math.round(chunkEndPercent),
               message: `Resolving imports (chunk ${chunkIdx + 1}/${numChunks})...`,
               detail: `${current}/${total} files`,
-              stats: { filesProcessed: filesParsedSoFar, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
+              stats: { filesProcessed: chunkEndFiles, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
             });
           }, repoPath, importCtx);
           // Calls + Heritage + Routes — resolve in parallel (no shared mutable state between them)
@@ -239,11 +241,11 @@ export const runPipelineFromRepo = async (
               ctx,
               (current, total) => {
                 onProgress({
-                  phase: 'parsing',
-                  percent: Math.round(chunkBasePercent),
+                  phase: 'calls',
+                  percent: Math.round(chunkEndPercent),
                   message: `Resolving calls (chunk ${chunkIdx + 1}/${numChunks})...`,
                   detail: `${current}/${total} files`,
-                  stats: { filesProcessed: filesParsedSoFar, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
+                  stats: { filesProcessed: chunkEndFiles, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
                 });
               },
               chunkWorkerData.constructorBindings,
@@ -254,11 +256,11 @@ export const runPipelineFromRepo = async (
               ctx,
               (current, total) => {
                 onProgress({
-                  phase: 'parsing',
-                  percent: Math.round(chunkBasePercent),
+                  phase: 'heritage',
+                  percent: Math.round(chunkEndPercent),
                   message: `Resolving heritage (chunk ${chunkIdx + 1}/${numChunks})...`,
                   detail: `${current}/${total} records`,
-                  stats: { filesProcessed: filesParsedSoFar, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
+                  stats: { filesProcessed: chunkEndFiles, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
                 });
               },
             ),
@@ -268,11 +270,11 @@ export const runPipelineFromRepo = async (
               ctx,
               (current, total) => {
                 onProgress({
-                  phase: 'parsing',
-                  percent: Math.round(chunkBasePercent),
+                  phase: 'calls',
+                  percent: Math.round(chunkEndPercent),
                   message: `Resolving routes (chunk ${chunkIdx + 1}/${numChunks})...`,
                   detail: `${current}/${total} routes`,
-                  stats: { filesProcessed: filesParsedSoFar, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
+                  stats: { filesProcessed: chunkEndFiles, totalFiles: totalParseable, nodesCreated: graph.nodeCount },
                 });
               },
             ),

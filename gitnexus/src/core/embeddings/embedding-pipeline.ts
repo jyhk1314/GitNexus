@@ -244,6 +244,7 @@ export const runEmbeddingPipeline = async (
       processedNodes += batch.length;
 
       // Report progress (20-90% for embedding phase)
+      // 每批都更新进度，确保用户能看到进度变化
       const embeddingProgress = 20 + ((processedNodes / totalNodes) * 70);
       onProgress({
         phase: 'embedding',

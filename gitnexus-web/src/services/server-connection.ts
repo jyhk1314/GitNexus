@@ -107,11 +107,16 @@ export async function cloneAnalyzeOnServer(
       const dataLine = line.match(/^data:\s*(.+)$/m)?.[1];
       if (!dataLine) continue;
       try {
-        const data = JSON.parse(dataLine) as { type: string; phase?: string; percent?: number; ok?: boolean; error?: string; alreadyExists?: boolean; path?: string };
+        const data = JSON.parse(dataLine) as { type: string; phase?: string; percent?: number; filesProcessed?: number; totalFiles?: number; ok?: boolean; error?: string; alreadyExists?: boolean; path?: string };
         if (data.type === 'clone_done') {
           onProgress('clone_done', 5);
         } else if (data.type === 'progress' && data.phase != null) {
-          onProgress(data.phase, typeof data.percent === 'number' ? data.percent : 0);
+          // 传递文件数量信息（如果有）；只要有 filesProcessed/totalFiles 就编码进 phase 字符串
+          const hasFiles = data.filesProcessed !== undefined && data.totalFiles !== undefined && data.totalFiles > 0;
+          const phaseWithFiles = hasFiles
+            ? `${data.phase}|${data.filesProcessed}|${data.totalFiles}`
+            : data.phase;
+          onProgress(phaseWithFiles, typeof data.percent === 'number' ? data.percent : 0);
         } else if (data.type === 'done') {
           if (data.alreadyExists && data.ok) {
             onProgress('already_exists', 100);
