@@ -187,14 +187,14 @@ const setLanguage = (language: SupportedLanguages, filePath: string): void => {
 // ============================================================================
 
 /** Walk up AST to find enclosing function, return its generateId or null for top-level */
-const findEnclosingFunctionId = (node: any, filePath: string): string | null => {
+const findEnclosingFunctionId = (node: any, filePath: string, language?: SupportedLanguages): string | null => {
   let current = node.parent;
   while (current) {
     if (FUNCTION_NODE_TYPES.has(current.type)) {
       const { funcName, label } = extractFunctionName(current);
       if (funcName) {
         // Use the same scope key as nodeId generation: class id when available, filePath otherwise.
-        const enclosingClassId = findEnclosingClassId(current, filePath);
+        const enclosingClassId = findEnclosingClassId(current, filePath, language);
         const scope = enclosingClassId ?? filePath;
         return generateId(label, `${scope}:${funcName}`);
       }
@@ -908,7 +908,7 @@ const processFileGroup = (
             }
 
             if (routed.kind === 'properties') {
-              const propEnclosingClassId = findEnclosingClassId(captureMap['call'], file.path);
+              const propEnclosingClassId = findEnclosingClassId(captureMap['call'], file.path, language);
               for (const item of routed.items) {
                 const nodeId = generateId('Property', `${file.path}:${item.propName}`);
                 result.nodes.push({
@@ -960,7 +960,7 @@ const processFileGroup = (
 
           if (!isBuiltInOrNoise(calledName)) {
             const callNode = captureMap['call'];
-            const sourceId = findEnclosingFunctionId(callNode, file.path)
+            const sourceId = findEnclosingFunctionId(callNode, file.path, language)
               || generateId('File', file.path);
             const callForm = inferCallForm(callNode, callNameNode);
             const receiverName = callForm === 'member' ? extractReceiverName(callNameNode) : undefined;
@@ -1059,7 +1059,7 @@ const processFileGroup = (
       // Compute enclosing class before generating nodeId so we can use it as the scope key.
       // Function is included because Kotlin/Rust/Python capture class methods as Function nodes.
       const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
-      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path) : null;
+      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path, language) : null;
 
       // C++: a Function node that has an enclosing class is actually a method (constructor, or member
       // function captured via the top-level `declaration` rule). Promote it to Method so that the

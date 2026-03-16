@@ -298,8 +298,9 @@ export const CONTAINER_TYPE_TO_LABEL: Record<string, string> = {
 /** Walk up AST to find enclosing class/struct/interface/impl, return its generateId or null.
  *  For Go method_declaration nodes, extracts receiver type (e.g. `func (u *User) Save()` → User struct).
  *  For C++ out-of-line definitions (ClassName::method), extracts the scope from qualified_identifier
- *  and returns a filePath-free id so that .h declarations and .cpp definitions share the same class node. */
-export const findEnclosingClassId = (node: any, filePath: string): string | null => {
+ *  and returns a filePath-free id so that .h declarations and .cpp definitions share the same class node.
+ *  When language is CPlusPlus, class_specifier/struct_specifier also return filePath-free id for consistency. */
+export const findEnclosingClassId = (node: any, filePath: string, language?: string): string | null => {
   // C++: out-of-line method definition — name node sits inside a qualified_identifier.
   // e.g. `void MyClass::foo() {}` → nameNode.parent = qualified_identifier, scope = MyClass.
   // We cannot know which .h file defines the class, so we use a filePath-free id that matches
@@ -356,6 +357,10 @@ export const findEnclosingClassId = (node: any, filePath: string): string | null
         );
       if (nameNode) {
         const label = CONTAINER_TYPE_TO_LABEL[current.type] || 'Class';
+        // C++: use filePath-free id so .h class body and .cpp qualified_identifier share the same class node
+        if (language === SupportedLanguages.CPlusPlus && (current.type === 'class_specifier' || current.type === 'struct_specifier')) {
+          return generateId(label, nameNode.text);
+        }
         return generateId(label, `${filePath}:${nameNode.text}`);
       }
     }

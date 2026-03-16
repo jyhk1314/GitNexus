@@ -235,7 +235,7 @@ const processParsingSequential = async (
       // Compute enclosing class before generating nodeId so we can use it as the scope key.
       // Function is included because Kotlin/Rust/Python capture class methods as Function nodes.
       const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
-      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNodeForRange, file.path) : null;
+      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNodeForRange, file.path, language) : null;
 
       // C++: a Function node that has an enclosing class is actually a method (constructor, or member
       // function captured via the top-level `declaration` rule). Promote it to Method so that the
