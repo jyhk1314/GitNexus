@@ -313,7 +313,8 @@ export interface AgentMessage {
  */
 export async function* streamAgentResponse(
   agent: ReturnType<typeof createReactAgent>,
-  messages: AgentMessage[]
+  messages: AgentMessage[],
+  recursionLimit: number = 100
 ): AsyncGenerator<AgentStreamChunk> {
   try {
     const formattedMessages = messages.map(m => ({
@@ -327,7 +328,7 @@ export async function* streamAgentResponse(
       {
         streamMode: ['values', 'messages'] as any,
         // Allow longer tool/reasoning loops (more Cursor-like persistence)
-        recursionLimit: 100,
+        recursionLimit: recursionLimit,
       } as any
     );
     

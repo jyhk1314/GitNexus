@@ -104,6 +104,9 @@ export interface LLMSettings {
   hasSeenClusteringPrompt: boolean;
   useSameModelForClustering: boolean;
   clusteringProvider?: Partial<ProviderConfig>; // Optional specific config for clustering
+  
+  // Agent Settings
+  recursionLimit?: number; // Maximum recursion depth for agent tool/reasoning loops (default: 100)
 }
 
 /**
@@ -114,6 +117,7 @@ export const DEFAULT_LLM_SETTINGS: LLMSettings = {
   intelligentClustering: false,
   hasSeenClusteringPrompt: false,
   useSameModelForClustering: true,
+  recursionLimit: 100, // Default recursion limit for agent tool/reasoning loops
   openai: {
     apiKey: '',
     model: 'gpt-4o',

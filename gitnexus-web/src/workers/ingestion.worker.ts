@@ -12,6 +12,7 @@ import { isEmbedderReady, disposeEmbedder } from '../core/embeddings/embedder';
 import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings/types';
 import type { ProviderConfig, AgentStreamChunk } from '../core/llm/types';
 import { createGraphRAGAgent, streamAgentResponse, type AgentMessage, createChatModel } from '../core/llm/agent';
+import { loadSettings } from '../core/llm/settings-service';
 import { SystemMessage } from '@langchain/core/messages';
 import { enrichClustersBatch, ClusterMemberInfo, ClusterEnrichment } from '../core/ingestion/cluster-enricher';
 import { CommunityNode } from '../core/ingestion/community-processor';
@@ -733,7 +734,11 @@ const workerApi = {
     chatCancelled = false;
 
     try {
-      for await (const chunk of streamAgentResponse(currentAgent, messages)) {
+      // Get recursion limit from settings (default: 100)
+      const settings = loadSettings();
+      const recursionLimit = settings.recursionLimit ?? 100;
+      
+      for await (const chunk of streamAgentResponse(currentAgent, messages, recursionLimit)) {
         if (chatCancelled) {
           onChunk({ type: 'done' });
           break;

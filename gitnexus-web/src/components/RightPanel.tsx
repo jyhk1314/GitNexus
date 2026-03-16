@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send, Square, Sparkles, User,
-  PanelRightClose, Loader2, AlertTriangle, GitBranch, X
+  PanelRightClose, Loader2, AlertTriangle, GitBranch, X, Settings
 } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import { ToolCallCard } from './ToolCallCard';
@@ -26,10 +26,13 @@ export const RightPanel = () => {
     sendChatMessage,
     stopChatResponse,
     clearChat,
+    llmSettings,
+    updateLLMSettings,
   } = useAppState();
 
   const [chatInput, setChatInput] = useState('');
   const [activeTab, setActiveTab] = useState<'chat' | 'processes'>('chat');
+  const [showRecursionConfig, setShowRecursionConfig] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -46,6 +49,19 @@ export const RightPanel = () => {
     const timer = setTimeout(clearAgentError, 6000);
     return () => clearTimeout(timer);
   }, [agentError, clearAgentError]);
+
+  // Close recursion config when clicking outside
+  useEffect(() => {
+    if (!showRecursionConfig) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.recursion-config-container')) {
+        setShowRecursionConfig(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showRecursionConfig]);
 
   const resolveFilePathForUI = useCallback((requestedPath: string): string | null => {
     const req = requestedPath.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
@@ -270,6 +286,79 @@ export const RightPanel = () => {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Status bar */}
           <div className="flex items-center gap-2.5 px-4 py-3 bg-elevated/50 border-b border-border-subtle">
+            <div className="flex items-center gap-2 relative">
+              {/* Recursion Limit Config */}
+              <div className="relative recursion-config-container">
+                <button
+                  onClick={() => setShowRecursionConfig(!showRecursionConfig)}
+                  className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-text-muted hover:text-text-primary hover:bg-hover rounded transition-colors"
+                  title="配置递归次数"
+                >
+                  <Settings className="w-3 h-3" />
+                  <span>模型自动递归最大限制: {llmSettings.recursionLimit ?? 100}</span>
+                </button>
+                {showRecursionConfig && (
+                  <div className="absolute top-full left-0 mt-1 bg-surface border border-border-subtle rounded-lg shadow-lg p-3 z-50 min-w-[200px]">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-medium text-text-primary">
+                        递归次数限制
+                      </label>
+                      <button
+                        onClick={() => setShowRecursionConfig(false)}
+                        className="text-text-muted hover:text-text-primary"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-text-secondary mb-2">
+                      限制单轮对话中「推理 → 调用工具 → 再推理」的循环上限
+                    </p>
+                    <input
+                      type="number"
+                      min="1"
+                      max="500"
+                      value={llmSettings.recursionLimit ?? 100}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value, 10);
+                        if (!isNaN(value) && value > 0 && value <= 500) {
+                          updateLLMSettings({ recursionLimit: value });
+                        }
+                      }}
+                      className="w-full px-2 py-1.5 text-sm bg-elevated border border-border-subtle rounded text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+                    />
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          updateLLMSettings({ recursionLimit: 50 });
+                          setShowRecursionConfig(false);
+                        }}
+                        className="flex-1 px-2 py-1 text-xs bg-elevated hover:bg-hover border border-border-subtle rounded transition-colors"
+                      >
+                        50
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateLLMSettings({ recursionLimit: 100 });
+                          setShowRecursionConfig(false);
+                        }}
+                        className="flex-1 px-2 py-1 text-xs bg-elevated hover:bg-hover border border-border-subtle rounded transition-colors"
+                      >
+                        100
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateLLMSettings({ recursionLimit: 200 });
+                          setShowRecursionConfig(false);
+                        }}
+                        className="flex-1 px-2 py-1 text-xs bg-elevated hover:bg-hover border border-border-subtle rounded transition-colors"
+                      >
+                        200
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
             <div className="ml-auto flex items-center gap-2">
               {!isAgentReady && (
                 <span className="text-[11px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
