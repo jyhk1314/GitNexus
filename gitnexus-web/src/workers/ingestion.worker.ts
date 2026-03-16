@@ -75,7 +75,7 @@ const httpFetchWithTimeout = async (
 
 const createHttpExecuteQuery = (backendUrl: string, repo: string) => {
   return async (cypher: string): Promise<any[]> => {
-    const response = await httpFetchWithTimeout(`${backendUrl}/api/query`, {
+    const response = await httpFetchWithTimeout(`${backendUrl}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cypher, repo }),
@@ -98,7 +98,7 @@ const createHttpExecuteQuery = (backendUrl: string, repo: string) => {
 const createHttpHybridSearch = (backendUrl: string, repo: string) => {
   return async (query: string, k: number = 15): Promise<any[]> => {
     try {
-      const response = await httpFetchWithTimeout(`${backendUrl}/api/search`, {
+      const response = await httpFetchWithTimeout(`${backendUrl}/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, limit: k, repo }),
@@ -721,10 +721,12 @@ const workerApi = {
    * Sends response chunks via the onChunk callback
    * @param messages - Conversation history
    * @param onChunk - Proxied callback for streaming chunks (runs on main thread)
+   * @param recursionLimit - Maximum recursion depth for agent tool/reasoning loops (default: 100)
    */
   async chatStream(
     messages: AgentMessage[],
-    onChunk: (chunk: AgentStreamChunk) => void
+    onChunk: (chunk: AgentStreamChunk) => void,
+    recursionLimit?: number
   ): Promise<void> {
     if (!currentAgent) {
       onChunk({ type: 'error', error: 'Agent not initialized. Please configure an LLM provider first.' });
@@ -734,11 +736,10 @@ const workerApi = {
     chatCancelled = false;
 
     try {
-      // Get recursion limit from settings (default: 100)
-      const settings = loadSettings();
-      const recursionLimit = settings.recursionLimit ?? 100;
+      // Use provided recursionLimit, or fallback to settings, or default to 100
+      const effectiveRecursionLimit = recursionLimit ?? loadSettings().recursionLimit ?? 100;
       
-      for await (const chunk of streamAgentResponse(currentAgent, messages, recursionLimit)) {
+      for await (const chunk of streamAgentResponse(currentAgent, messages, effectiveRecursionLimit)) {
         if (chatCancelled) {
           onChunk({ type: 'done' });
           break;

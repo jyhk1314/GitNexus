@@ -43,13 +43,6 @@ export const RightPanel = () => {
     }
   }, [chatMessages, isChatLoading]);
 
-  // Auto-dismiss error after 6 seconds
-  useEffect(() => {
-    if (!agentError) return;
-    const timer = setTimeout(clearAgentError, 6000);
-    return () => clearTimeout(timer);
-  }, [agentError, clearAgentError]);
-
   // Close recursion config when clicking outside
   useEffect(() => {
     if (!showRecursionConfig) return;

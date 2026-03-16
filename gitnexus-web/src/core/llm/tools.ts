@@ -452,7 +452,11 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
   // ============================================================================
   
   const readTool = tool(
-    async ({ filePath }: { filePath: string }) => {
+    async ({ filePath }: { filePath?: string }) => {
+      if (!filePath || filePath.trim() === '') {
+        return 'Error: The "filePath" parameter is required. Please provide a file path to read, for example: "src/utils.ts" or "BackServiceCpp/src/cpp/Zmdb/OracleFlush/ZmdbLoadFromOra.h".';
+      }
+      
       const normalizedRequest = filePath.replace(/\\/g, '/').toLowerCase();
       
       // Try exact match first
@@ -521,9 +525,14 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
     },
     {
       name: 'read',
-      description: 'Read the full content of a file. Use to see source code after finding files via search or grep.',
+      description: `Read the full content of a file. Use to see source code after finding files via search or grep.
+
+IMPORTANT: You MUST provide the "filePath" parameter. It cannot be empty.
+Example: read({"filePath": "src/utils.ts"}) or read({"filePath": "BackServiceCpp/src/cpp/Zmdb/OracleFlush/ZmdbLoadFromOra.h"})
+
+If you don't know the exact file path, use search() or grep() first to find files.`,
       schema: z.object({
-        filePath: z.string().describe('File path to read (can be partial like "src/utils.ts")'),
+        filePath: z.string().optional().describe('File path to read (can be partial like "src/utils.ts"). REQUIRED - must provide a non-empty string. Use search() or grep() first if you don\'t know the exact path.'),
       }),
     }
   );

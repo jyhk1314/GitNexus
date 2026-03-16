@@ -1036,7 +1036,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
         }
       });
 
-      await api.chatStream(history, onChunk);
+      await api.chatStream(history, onChunk, llmSettings.recursionLimit);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setAgentError(message);
