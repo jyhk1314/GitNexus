@@ -23,14 +23,27 @@ export function loadSavedQueries(): SavedQuery[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return [];
-    return JSON.parse(stored) as SavedQuery[];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is SavedQuery =>
+        typeof item?.id === 'string' &&
+        typeof item?.label === 'string' &&
+        typeof item?.query === 'string' &&
+        typeof item?.isBuiltin === 'boolean' &&
+        typeof item?.createdAt === 'number'
+    );
   } catch {
     return [];
   }
 }
 
 function persistQueries(queries: SavedQuery[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(queries));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(queries));
+  } catch (error) {
+    console.error('Failed to persist saved queries:', error);
+  }
 }
 
 /**
@@ -40,6 +53,7 @@ function persistQueries(queries: SavedQuery[]): void {
 export function initializeBuiltins(
   builtins: { label: string; query: string }[]
 ): void {
+  if (builtins.length === 0) return;
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored !== null) return; // already initialized
 
