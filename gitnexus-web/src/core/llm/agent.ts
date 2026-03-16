@@ -79,7 +79,20 @@ You are an investigator. For each question:
 - **\`impact\`** — Impact analysis. Shows affected processes, clusters, and risk level.
 
 ## 📊 GRAPH SCHEMA
-Nodes: File, Folder, Function, Class, Interface, Method, Community, Process
+
+**Node properties** (use exact field names — \`path\` does NOT exist, always use \`filePath\`):
+| Node | Fields |
+|------|--------|
+| \`File\` | \`id\`, \`name\`, \`filePath\`, \`content\` |
+| \`Folder\` | \`id\`, \`name\`, \`filePath\` |
+| \`Function\` | \`id\`, \`name\`, \`filePath\`, \`startLine\`, \`endLine\`, \`isExported\`, \`content\`, \`description\` |
+| \`Class\` | \`id\`, \`name\`, \`filePath\`, \`startLine\`, \`endLine\`, \`isExported\`, \`content\`, \`description\` |
+| \`Interface\` | \`id\`, \`name\`, \`filePath\`, \`startLine\`, \`endLine\`, \`isExported\`, \`content\`, \`description\` |
+| \`Method\` | \`id\`, \`name\`, \`filePath\`, \`startLine\`, \`endLine\`, \`isExported\`, \`content\`, \`description\`, \`parameterCount\`, \`returnType\` |
+| \`CodeElement\` | \`id\`, \`name\`, \`filePath\`, \`startLine\`, \`endLine\`, \`isExported\`, \`content\`, \`description\` |
+| \`Community\` | \`id\`, \`label\`, \`heuristicLabel\`, \`description\`, \`cohesion\`, \`symbolCount\` |
+| \`Process\` | \`id\`, \`label\`, \`heuristicLabel\`, \`processType\`, \`stepCount\`, \`entryPointId\`, \`terminalId\` |
+
 Relations: \`CodeRelation\` with \`type\` property: CONTAINS, DEFINES, IMPORTS, CALLS, EXTENDS, IMPLEMENTS, MEMBER_OF, STEP_IN_PROCESS
 
 ## 📐 GRAPH SEMANTICS (Important!)
@@ -94,8 +107,9 @@ Relations: \`CodeRelation\` with \`type\` property: CONTAINS, DEFINES, IMPORTS, 
 - Entry points are detected via export status, naming patterns, and framework conventions
 
 Cypher examples:
-- \`MATCH (f:Function) RETURN f.name LIMIT 10\`
+- \`MATCH (f:Function) RETURN f.name, f.filePath LIMIT 10\`
 - \`MATCH (f:File)-[:CodeRelation {type: 'IMPORTS'}]->(g:File) RETURN f.name, g.name\`
+- \`MATCH (f:Folder) RETURN f.name, f.filePath ORDER BY f.filePath\`
 
 ## 📝CRITICAL RULES
 - **impact output is trusted.** Do NOT re-validate with cypher. Optionally run the suggested grep commands for dynamic patterns.
@@ -317,10 +331,31 @@ export async function* streamAgentResponse(
   recursionLimit: number = 100
 ): AsyncGenerator<AgentStreamChunk> {
   try {
-    const formattedMessages = messages.map(m => ({
-      role: m.role,
-      content: m.content,
-    }));
+    // Filter out messages with empty content to avoid API errors
+    // Some LLM APIs (e.g., Anthropic) require text content blocks to be non-empty
+    const formattedMessages = messages
+      .filter(m => {
+        // AgentMessage.content is string, but check for empty/whitespace-only content
+        const content = m.content;
+        return content && typeof content === 'string' && content.trim().length > 0;
+      })
+      .map(m => ({
+        role: m.role,
+        content: m.content,
+      }));
+    
+    // Ensure we have at least one message (should always have user message)
+    if (formattedMessages.length === 0) {
+      throw new Error('No valid messages to send. All messages had empty content.');
+    }
+    
+    // Debug logging in dev mode
+    if (import.meta.env.DEV) {
+      const emptyCount = messages.length - formattedMessages.length;
+      if (emptyCount > 0) {
+        console.warn(`⚠️ Filtered out ${emptyCount} message(s) with empty content`);
+      }
+    }
     
     // Use BOTH modes: 'values' for structure, 'messages' for token streaming
     const stream = await agent.stream(
@@ -533,10 +568,21 @@ export const invokeAgent = async (
   agent: ReturnType<typeof createReactAgent>,
   messages: AgentMessage[]
 ): Promise<string> => {
-  const formattedMessages = messages.map(m => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Filter out messages with empty content to avoid API errors
+  const formattedMessages = messages
+    .filter(m => {
+      const content = m.content;
+      return content && typeof content === 'string' && content.trim().length > 0;
+    })
+    .map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+  
+  // Ensure we have at least one message
+  if (formattedMessages.length === 0) {
+    throw new Error('No valid messages to send. All messages had empty content.');
+  }
   
   const result = await agent.invoke({ messages: formattedMessages });
   

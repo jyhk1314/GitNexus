@@ -345,10 +345,23 @@ export const createGraphRAGTools = (
       name: 'cypher',
       description: `Execute a Cypher query against the code graph. Use for structural queries like finding callers, tracing imports, class inheritance, or custom traversals.
 
-Node tables: File, Folder, Function, Class, Interface, Method, CodeElement
-Relation: CodeRelation (single table with 'type' property: CONTAINS, DEFINES, IMPORTS, CALLS, EXTENDS, IMPLEMENTS)
+IMPORTANT: Use exact field names. 'path' does NOT exist — always use 'filePath'.
+
+Node tables and their fields:
+- File: id, name, filePath, content
+- Folder: id, name, filePath
+- Function: id, name, filePath, startLine, endLine, isExported, content, description
+- Class: id, name, filePath, startLine, endLine, isExported, content, description
+- Interface: id, name, filePath, startLine, endLine, isExported, content, description
+- Method: id, name, filePath, startLine, endLine, isExported, content, description, parameterCount, returnType
+- CodeElement: id, name, filePath, startLine, endLine, isExported, content, description
+- Community: id, label, heuristicLabel, description, cohesion, symbolCount
+- Process: id, label, heuristicLabel, processType, stepCount, entryPointId, terminalId
+
+Relation: CodeRelation (single table with 'type' property: CONTAINS, DEFINES, IMPORTS, CALLS, EXTENDS, IMPLEMENTS, MEMBER_OF, STEP_IN_PROCESS)
 
 Example queries:
+- List folders: MATCH (f:Folder) RETURN f.name, f.filePath ORDER BY f.filePath
 - Functions calling a function: MATCH (caller:Function)-[:CodeRelation {type: 'CALLS'}]->(fn:Function {name: 'validate'}) RETURN caller.name, caller.filePath
 - Class inheritance: MATCH (child:Class)-[:CodeRelation {type: 'EXTENDS'}]->(parent:Class) RETURN child.name, parent.name
 - Classes implementing interface: MATCH (c:Class)-[:CodeRelation {type: 'IMPLEMENTS'}]->(i:Interface) RETURN c.name, i.name
