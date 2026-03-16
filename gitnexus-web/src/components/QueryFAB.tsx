@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Terminal, Play, X, ChevronDown, ChevronUp, Loader2, Sparkles, Table } from 'lucide-react';
-import { Trash2, BookmarkPlus } from 'lucide-react';
+import { Terminal, Play, X, ChevronDown, ChevronUp, Loader2, Sparkles, Table, Trash2, BookmarkPlus } from 'lucide-react';
 import {
   loadSavedQueries,
   initializeBuiltins,
@@ -104,13 +103,14 @@ export const QueryFAB = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isExpanded) {
+        if (showSaveInput) return;
         setIsExpanded(false);
         setShowExamples(false);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isExpanded]);
+  }, [isExpanded, showSaveInput]);
 
   useEffect(() => {
     initializeBuiltins(BUILTIN_QUERIES);
@@ -234,7 +234,7 @@ export const QueryFAB = () => {
   const handleShowSaveInput = () => {
     setSaveLabel(query.trim().slice(0, 30));
     setShowSaveInput(true);
-    setTimeout(() => saveLabelRef.current?.focus(), 50);
+    requestAnimationFrame(() => saveLabelRef.current?.focus());
   };
 
   if (!isExpanded) {
