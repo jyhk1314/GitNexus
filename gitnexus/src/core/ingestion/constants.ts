@@ -1,5 +1,5 @@
 /**
- * Default minimum buffer size for tree-sitter parsing (2M).
+ * Default minimum buffer size for tree-sitter parsing (2 MB).
  * tree-sitter requires bufferSize >= file size in bytes.
  */
 export const TREE_SITTER_BUFFER_SIZE = 2 * 1024 * 1024;
@@ -12,7 +12,7 @@ export const TREE_SITTER_MAX_BUFFER = 32 * 1024 * 1024;
 
 /**
  * Compute adaptive buffer size for tree-sitter parsing.
- * Uses 2× file size, clamped between 2M and 32 MB.
+ * Uses 2× file size, clamped between 2 MB and 32 MB.
  * Previous 256 KB fixed limit silently skipped files > ~200 KB (e.g., imgui.h at 411 KB).
  */
 export const getTreeSitterBufferSize = (contentLength: number): number =>

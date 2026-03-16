@@ -4,6 +4,7 @@ import { loadParser, loadLanguage } from '../tree-sitter/parser-loader';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries';
 import { generateId } from '../../lib/utils';
 import { getLanguageFromFilename } from './utils';
+import { callRouters } from './call-routing';
 
 // Type: Map<FilePath, Set<ResolvedFilePath>>
 // Stores all files that a given file imports from
@@ -37,15 +38,6 @@ const resolveImportPath = (
   
   const basePath = currentDir.join('/');
 
-  // 1b. C/C++ style: same-directory for "file.h" (no leading . or /)
-  if (!importPath.startsWith('.') && !importPath.startsWith('<')) {
-    const sameDirPath = currentDir.length ? currentDir.join('/') + '/' + importPath : importPath;
-    if (allFiles.has(sameDirPath)) {
-      resolveCache.set(cacheKey, sameDirPath);
-      return sameDirPath;
-    }
-  }
-
   // 2. Try extensions for all supported languages
   const extensions = [
     '', 
@@ -62,7 +54,9 @@ const resolveImportPath = (
     // Go
     '.go',
     // Rust
-    '.rs', '/mod.rs'
+    '.rs', '/mod.rs',
+    // Ruby
+    '.rb', '.rake',
   ];
   
   if (importPath.startsWith('.')) {
@@ -93,19 +87,11 @@ const resolveImportPath = (
 
   for (let i = 0; i < pathParts.length; i++) {
     const suffix = pathParts.slice(i).join('/');
-    // Try exact suffix first (e.g. "ZmdbWebMonitor.h" — path already has extension)
-    const suffixPatternExact = '/' + suffix;
-    let matchIdx = normalizedFileList.findIndex(filePath =>
-      filePath.endsWith(suffixPatternExact) || filePath.toLowerCase().endsWith(suffixPatternExact.toLowerCase())
-    );
-    if (matchIdx !== -1) {
-      resolveCache.set(cacheKey, allFileList[matchIdx]);
-      return allFileList[matchIdx];
-    }
     for (const ext of extensions) {
       const suffixWithExt = suffix + ext;
+      // Require path separator before match to avoid false positives like "View.java" matching "RootView.java"
       const suffixPattern = '/' + suffixWithExt;
-      matchIdx = normalizedFileList.findIndex(filePath =>
+      const matchIdx = normalizedFileList.findIndex(filePath => 
         filePath.endsWith(suffixPattern) || filePath.toLowerCase().endsWith(suffixPattern.toLowerCase())
       );
       if (matchIdx !== -1) {
@@ -235,6 +221,35 @@ export const processImports = async (
             importMap.set(file.path, new Set());
           }
           importMap.get(file.path)!.add(resolvedPath);
+        }
+      }
+
+      // ---- Language-specific call-as-import routing (Ruby require, etc.) ----
+      if (captureMap['call']) {
+        const callNameNode = captureMap['call.name'];
+        if (callNameNode) {
+          const callRouter = callRouters[language];
+          const routed = callRouter(callNameNode.text, captureMap['call']);
+          if (routed && routed.kind === 'import') {
+            totalImportsFound++;
+            const resolvedPath = resolveImportPath(
+              file.path, routed.importPath, allFilePaths, allFileList, resolveCache
+            );
+            if (resolvedPath) {
+              const sourceId = generateId('File', file.path);
+              const targetId = generateId('File', resolvedPath);
+              const relId = generateId('IMPORTS', `${file.path}->${resolvedPath}`);
+              totalImportsResolved++;
+              graph.addRelationship({
+                id: relId, sourceId, targetId,
+                type: 'IMPORTS', confidence: 1.0, reason: '',
+              });
+              if (!importMap.has(file.path)) {
+                importMap.set(file.path, new Set());
+              }
+              importMap.get(file.path)!.add(resolvedPath);
+            }
+          }
         }
       }
     });

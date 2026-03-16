@@ -309,7 +309,7 @@ const generateHeuristicLabel = (
     if (parts.length >= 2) {
       const folder = parts[parts.length - 2];
       // Skip generic folder names
-      if (!['src', 'lib', 'core', 'utils', 'common', 'shared', 'helpers'].includes(folder.toLowerCase())) {
+      if (!['src', 'lib', 'core', 'utils', 'common', 'shared', 'helpers', 'app', 'helper'].includes(folder.toLowerCase())) {
         folderCounts.set(folder, (folderCounts.get(folder) || 0) + 1);
       }
     }

@@ -24,7 +24,6 @@ import type { ConstructorBinding } from './type-env.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedCall, ExtractedHeritage, ExtractedRoute, FileConstructorBindings } from './workers/parse-worker.js';
 import { callRouters } from './call-routing.js';
-import type { ImportMap } from './import-processor.js';
 
 /**
  * Walk up the AST from a node to find the enclosing function/method.
@@ -263,7 +262,7 @@ export const processCalls = async (
         argCount: countCallArguments(callNode),
         callForm,
         receiverTypeName,
-      }, file.path, ctx, language);
+      }, file.path, ctx);
 
       if (!resolved) return;
 
@@ -354,18 +353,6 @@ const toResolveResult = (
 });
 
 /**
- * True if two files have a reference (include/import) relationship in either direction.
- * Used for C++ to only create CALLS when caller and callee files are related.
- */
-const filesHaveReference = (fileA: string, fileB: string, ctx: ResolutionContext): boolean => {
-  if (fileA === fileB) return true;
-  const importMap = ctx.importMap;
-  if (importMap.get(fileA)?.has(fileB)) return true;
-  if (importMap.get(fileB)?.has(fileA)) return true;
-  return false;
-};
-
-/**
  * Resolve a function call to its target node ID using priority strategy:
  * A. Narrow candidates by scope tier via ctx.resolve()
  * B. Filter to callable symbol kinds (constructor-aware when callForm is set)
@@ -373,38 +360,16 @@ const filesHaveReference = (fileA: string, fileB: string, ctx: ResolutionContext
  * D. Apply receiver-type filtering for member calls with typed receivers
  *
  * If filtering still leaves multiple candidates, refuse to emit a CALLS edge.
- * 
- * For C++: only create a call when target has the same name (already guaranteed by lookup)
- * and caller/callee files have a reference (same file or include/import in either direction).
  */
 const resolveCallTarget = (
   call: Pick<ExtractedCall, 'calledName' | 'argCount' | 'callForm' | 'receiverTypeName'>,
   currentFile: string,
   ctx: ResolutionContext,
-  language?: string,
 ): ResolveResult | null => {
   const tiered = ctx.resolve(call.calledName, currentFile);
   if (!tiered) return null;
 
   const filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount, call.callForm);
-
-  // C++ special handling: only accept when caller and callee files have a reference
-  const isCpp = language === 'cpp' || language === 'c++';
-  if (isCpp && filteredCandidates.length > 0) {
-    const defWithRef = filteredCandidates.find(def => filesHaveReference(currentFile, def.filePath, ctx));
-    if (!defWithRef) return null;
-    // Continue with the single candidate that has a reference
-    if (filteredCandidates.length === 1) {
-      return toResolveResult(filteredCandidates[0], tiered.tier);
-    }
-    // Multiple candidates but only one with reference
-    const candidatesWithRef = filteredCandidates.filter(def => filesHaveReference(currentFile, def.filePath, ctx));
-    if (candidatesWithRef.length === 1) {
-      return toResolveResult(candidatesWithRef[0], tiered.tier);
-    }
-    // Multiple candidates with references - refuse to emit
-    return null;
-  }
 
   // D. Receiver-type filtering: for member calls with a known receiver type,
   // resolve the type through the same tiered import infrastructure, then
@@ -641,7 +606,6 @@ export const processCallsFromExtracted = async (
 
     ctx.enableCache(filePath);
     const receiverMap = fileReceiverTypes.get(filePath);
-    const language = getLanguageFromFilename(filePath);
 
     for (const call of calls) {
       let effectiveCall = call;
@@ -654,7 +618,7 @@ export const processCallsFromExtracted = async (
         }
       }
 
-      const resolved = resolveCallTarget(effectiveCall, effectiveCall.filePath, ctx, language || undefined);
+      const resolved = resolveCallTarget(effectiveCall, effectiveCall.filePath, ctx);
       if (!resolved) continue;
 
       const relId = generateId('CALLS', `${effectiveCall.sourceId}:${effectiveCall.calledName}->${resolved.nodeId}`);

@@ -182,10 +182,6 @@ export const C_QUERIES = `
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @definition.function
 (declaration declarator: (function_declarator declarator: (identifier) @name)) @definition.function
 
-; Functions with const/qualified return types (e.g. "const char Foo(...)")
-(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
-(declaration declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
-
 ; Structs, Unions, Enums, Typedefs
 (struct_specifier name: (type_identifier) @name) @definition.struct
 (union_specifier name: (type_identifier) @name) @definition.union
@@ -232,19 +228,9 @@ export const CPP_QUERIES = `
 (namespace_definition name: (namespace_identifier) @name) @definition.namespace
 (enum_specifier name: (type_identifier) @name) @definition.enum
 
-; Macros
-(preproc_function_def name: (identifier) @name) @definition.macro
-(preproc_def name: (identifier) @name) @definition.macro
-
 ; Functions & Methods
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @definition.function
-(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))) @definition.function
-
-; Functions with qualified/const return types (e.g. "const char Foo(...)")
-; tree-sitter-cpp wraps the declarator in pointer_declarator for these cases
-(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
-(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name)))) @definition.function
-(function_definition declarator: (reference_declarator (function_declarator declarator: (identifier) @name))) @definition.function
+(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))) @definition.method
 
 ; Templates
 (template_declaration (class_specifier name: (type_identifier) @name)) @definition.template
@@ -410,6 +396,40 @@ export const PHP_QUERIES = `
       [(name) (qualified_name)] @heritage.trait))) @heritage
 `;
 
+// Ruby queries - works with tree-sitter-ruby
+// NOTE: Ruby uses `call` for require, include, extend, prepend, attr_* etc.
+// These are all captured as @call and routed in JS post-processing:
+//   - require/require_relative → import extraction
+//   - include/extend/prepend → heritage (mixin) extraction
+//   - attr_accessor/attr_reader/attr_writer → property definition extraction
+//   - everything else → regular call extraction
+export const RUBY_QUERIES = `
+; ── Modules ──────────────────────────────────────────────────────────────────
+(module
+  name: (constant) @name) @definition.module
+
+; ── Classes ──────────────────────────────────────────────────────────────────
+(class
+  name: (constant) @name) @definition.class
+
+; ── Instance methods ─────────────────────────────────────────────────────────
+(method
+  name: (identifier) @name) @definition.method
+
+; ── Singleton (class-level) methods ──────────────────────────────────────────
+(singleton_method
+  name: (identifier) @name) @definition.function
+
+; ── All calls (require, include, attr_*, and regular calls routed in JS) ─────
+(call
+  method: (identifier) @call.name) @call
+
+; ── Heritage: class < SuperClass ─────────────────────────────────────────────
+(class
+  name: (constant) @heritage.class
+  superclass: (superclass
+    (constant) @heritage.extends)) @heritage`;
+    
 // Swift queries - works with tree-sitter-swift
 export const SWIFT_QUERIES = `
 ; Classes
@@ -474,6 +494,7 @@ export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.CSharp]: CSHARP_QUERIES,
   [SupportedLanguages.Rust]: RUST_QUERIES,
   [SupportedLanguages.PHP]: PHP_QUERIES,
+  [SupportedLanguages.Ruby]: RUBY_QUERIES,
   [SupportedLanguages.Swift]: SWIFT_QUERIES,
 };
  

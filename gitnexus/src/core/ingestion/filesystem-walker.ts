@@ -21,7 +21,7 @@ export interface FilePath {
 
 const READ_CONCURRENCY = 32;
 
-/** Skip files larger than 2MB — they're usually generated/vendored and can crash tree-sitter */
+/** Skip files larger than 2MB — they're usually generated/vendored and crash tree-sitter */
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
 
 /**

@@ -25,7 +25,6 @@ import { SupportedLanguages } from '../../config/supported-languages.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedHeritage } from './workers/parse-worker.js';
 import type { ResolutionContext } from './resolution-context.js';
-import { getRealCppClassOrStructName } from './parsing-processor.js';
 
 /** C#/Java convention: interfaces start with I followed by an uppercase letter */
 const INTERFACE_NAME_RE = /^I[A-Z]/;
@@ -159,13 +158,7 @@ export const processHeritage = async (
           return; // Named field, not struct embedding
         }
 
-        let className = captureMap['heritage.class'].text;
-        // C++ special handling: get real class/struct name (skip export macros)
-        if (language === SupportedLanguages.CPlusPlus) {
-          let p = captureMap['heritage.class'].parent;
-          while (p && p.type !== 'class_specifier' && p.type !== 'struct_specifier') p = p.parent;
-          if (p) className = getRealCppClassOrStructName(p, className);
-        }
+        const className = captureMap['heritage.class'].text;
         const parentClassName = captureMap['heritage.extends'].text;
 
         const { type: relType, idPrefix } = resolveExtendsType(parentClassName, file.path, ctx, language);
@@ -187,13 +180,7 @@ export const processHeritage = async (
 
       // IMPLEMENTS: Class implements Interface (TypeScript only)
       if (captureMap['heritage.class'] && captureMap['heritage.implements']) {
-        let className = captureMap['heritage.class'].text;
-        // C++ special handling: get real class/struct name (skip export macros)
-        if (language === SupportedLanguages.CPlusPlus) {
-          let p = captureMap['heritage.class'].parent;
-          while (p && p.type !== 'class_specifier' && p.type !== 'struct_specifier') p = p.parent;
-          if (p) className = getRealCppClassOrStructName(p, className);
-        }
+        const className = captureMap['heritage.class'].text;
         const interfaceName = captureMap['heritage.implements'].text;
 
         const classId = resolveHeritageId(className, file.path, ctx, 'Class', `${file.path}:${className}`);
