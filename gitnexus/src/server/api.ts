@@ -440,6 +440,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         try {
           const data = JSON.parse(trimmed);
           if (data.done) {
+            // 分析完成，先推进到 95% 再发 done，避免前端停在 93%
+            send({ type: 'progress', phase: 'Analysis complete', percent: 95 });
             send({ type: 'done', ok: true, path: data.path ?? targetPath });
             finishResponse();
           } else {

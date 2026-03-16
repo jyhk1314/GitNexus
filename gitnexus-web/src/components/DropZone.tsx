@@ -827,6 +827,10 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
                       if (phase === 'converting') {
                         return `正在转换编码... ${cloneProgress.percent.toFixed(1)}%`;
                       }
+                      // 分析完成，正在连接服务器拉取图数据
+                      if (phase === 'Analysis complete' || phase === 'connecting' || phase === 'validating' || phase === 'downloading' || phase === 'extracting') {
+                        return `正在连接服务器... ${cloneProgress.percent.toFixed(1)}%`;
+                      }
                       // 向量相关阶段（优先级高于通用分析阶段）
                       if (phase === 'Loading embedding model...' || phase === 'loading-model') {
                         return `正在加载向量模型... ${cloneProgress.percent.toFixed(1)}%`;
