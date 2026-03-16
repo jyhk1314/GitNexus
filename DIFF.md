@@ -53,6 +53,7 @@
 6. **ingestion/parsing-processor.ts - 进度优化**
 7. **ingestion/pipeline.ts - 进度优化**
 8. **lbug/csv-generator.ts - 文件截断大小优化**
+9. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明**
 
 #### 六、gitnexus-web/src/lib
 
@@ -120,4 +121,6 @@
 7. **llm/tools.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 增强read工具对路径依赖的限制**
 8. **llm/types.ts - 大模型递归次数限制可配置**
 9. **lbug/csv-generator.ts - 文件截断大小优化**
+10. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明**
+
 

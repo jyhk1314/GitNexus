@@ -263,8 +263,9 @@ export const GO_QUERIES = `
 // C++ queries - works with tree-sitter-cpp
 export const CPP_QUERIES = `
 ; Classes, Structs, Namespaces
-(class_specifier name: (type_identifier) @name) @definition.class
-(struct_specifier name: (type_identifier) @name) @definition.struct
+; Require body: (field_declaration_list) to exclude forward declarations (class Foo;)
+(class_specifier name: (type_identifier) @name body: (field_declaration_list)) @definition.class
+(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @definition.struct
 (namespace_definition name: (namespace_identifier) @name) @definition.namespace
 (enum_specifier name: (type_identifier) @name) @definition.enum
 
@@ -309,7 +310,7 @@ export const CPP_QUERIES = `
       declarator: [(field_identifier) (identifier) (operator_name) (destructor_name)] @name)) @definition.method)
 
 ; Templates
-(template_declaration (class_specifier name: (type_identifier) @name)) @definition.template
+(template_declaration (class_specifier name: (type_identifier) @name body: (field_declaration_list))) @definition.template
 (template_declaration (function_definition declarator: (function_declarator declarator: (identifier) @name))) @definition.template
 
 ; Includes
