@@ -52,6 +52,7 @@
 5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能**
 6. **ingestion/parsing-processor.ts - 进度优化**
 7. **ingestion/pipeline.ts - 进度优化**
+8. **lbug/csv-generator.ts - 文件截断大小优化**
 
 #### 六、gitnexus-web/src/lib
 
@@ -118,4 +119,5 @@
 6. **llm/settings-service.ts - 支持模型列表自检索**
 7. **llm/tools.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 增强read工具对路径依赖的限制**
 8. **llm/types.ts - 大模型递归次数限制可配置**
+9. **lbug/csv-generator.ts - 文件截断大小优化**
 

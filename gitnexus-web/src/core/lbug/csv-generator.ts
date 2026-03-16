@@ -92,7 +92,7 @@ const extractContent = (
   
   // For File nodes, return content (limited)
   if (node.label === 'File') {
-    const MAX_FILE_CONTENT = 10000;
+    const MAX_FILE_CONTENT = 200000;
     if (content.length > MAX_FILE_CONTENT) {
       return content.slice(0, MAX_FILE_CONTENT) + '\n... [truncated]';
     }
@@ -111,7 +111,7 @@ const extractContent = (
   const end = Math.min(lines.length - 1, endLine + contextLines);
   
   const snippet = lines.slice(start, end + 1).join('\n');
-  const MAX_SNIPPET = 5000;
+  const MAX_SNIPPET = 100000;
   if (snippet.length > MAX_SNIPPET) {
     return snippet.slice(0, MAX_SNIPPET) + '\n... [truncated]';
   }

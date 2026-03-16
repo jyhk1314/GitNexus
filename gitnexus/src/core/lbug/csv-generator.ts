@@ -121,7 +121,7 @@ const extractContent = async (
   if (isBinaryContent(content)) return '[Binary file - content not stored]';
 
   if (node.label === 'File') {
-    const MAX_FILE_CONTENT = 10000;
+    const MAX_FILE_CONTENT = 200000;
     return content.length > MAX_FILE_CONTENT
       ? content.slice(0, MAX_FILE_CONTENT) + '\n... [truncated]'
       : content;
@@ -135,7 +135,7 @@ const extractContent = async (
   const start = Math.max(0, startLine - 2);
   const end = Math.min(lines.length - 1, endLine + 2);
   const snippet = lines.slice(start, end + 1).join('\n');
-  const MAX_SNIPPET = 5000;
+  const MAX_SNIPPET = 100000;
   return snippet.length > MAX_SNIPPET
     ? snippet.slice(0, MAX_SNIPPET) + '\n... [truncated]'
     : snippet;
