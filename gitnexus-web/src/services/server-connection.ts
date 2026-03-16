@@ -107,12 +107,16 @@ export async function cloneAnalyzeOnServer(
       const dataLine = line.match(/^data:\s*(.+)$/m)?.[1];
       if (!dataLine) continue;
       try {
-        const data = JSON.parse(dataLine) as { type: string; phase?: string; percent?: number; ok?: boolean; error?: string };
+        const data = JSON.parse(dataLine) as { type: string; phase?: string; percent?: number; ok?: boolean; error?: string; alreadyExists?: boolean; path?: string };
         if (data.type === 'clone_done') {
           onProgress('clone_done', 5);
         } else if (data.type === 'progress' && data.phase != null) {
           onProgress(data.phase, typeof data.percent === 'number' ? data.percent : 0);
         } else if (data.type === 'done') {
+          if (data.alreadyExists && data.ok) {
+            onProgress('already_exists', 100);
+            return;
+          }
           if (!data.ok) throw new Error(data.error || 'clone-analyze failed');
           return;
         }

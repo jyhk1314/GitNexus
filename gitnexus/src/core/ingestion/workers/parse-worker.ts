@@ -978,12 +978,6 @@ const processFileGroup = (
 
       // Extract heritage (extends/implements)
       if (captureMap['heritage.class']) {
-        let heritageClassName = captureMap['heritage.class'].text;
-        if (language === SupportedLanguages.CPlusPlus) {
-          let p = captureMap['heritage.class'].parent;
-          while (p && p.type !== 'class_specifier' && p.type !== 'struct_specifier') p = p.parent;
-          if (p) heritageClassName = getRealCppClassOrStructName(p, heritageClassName);
-        }
         if (captureMap['heritage.extends']) {
           // Go struct embedding: the query matches ALL field_declarations with
           // type_identifier, but only anonymous fields (no name) are embedded.
@@ -995,7 +989,7 @@ const processFileGroup = (
           if (!isNamedField) {
             result.heritage.push({
               filePath: file.path,
-              className: heritageClassName,
+              className: captureMap['heritage.class'].text,
               parentName: captureMap['heritage.extends'].text,
               kind: 'extends',
             });
@@ -1004,7 +998,7 @@ const processFileGroup = (
         if (captureMap['heritage.implements']) {
           result.heritage.push({
             filePath: file.path,
-            className: heritageClassName,
+            className: captureMap['heritage.class'].text,
             parentName: captureMap['heritage.implements'].text,
             kind: 'implements',
           });
@@ -1012,7 +1006,7 @@ const processFileGroup = (
         if (captureMap['heritage.trait']) {
           result.heritage.push({
             filePath: file.path,
-            className: heritageClassName,
+            className: captureMap['heritage.class'].text,
             parentName: captureMap['heritage.trait'].text,
             kind: 'trait-impl',
           });
@@ -1028,21 +1022,7 @@ const processFileGroup = (
       const nameNode = captureMap['name'];
       // Synthesize name for constructors without explicit @name capture (e.g. Swift init)
       if (!nameNode && nodeLabel !== 'Constructor') continue;
-      let nodeName = nameNode ? nameNode.text : 'init';
-      if (language === SupportedLanguages.CPlusPlus) {
-        const specifier = captureMap['definition.class'] ?? captureMap['definition.struct'];
-        if (specifier) nodeName = getRealCppClassOrStructName(specifier, nodeName);
-      }
-
-      if (language === SupportedLanguages.CPlusPlus && (nodeLabel === 'Class' || nodeLabel === 'Struct' || nodeLabel === 'Template')) {
-        let spec = captureMap['definition.class'] ?? captureMap['definition.struct'];
-        if (!spec && captureMap['definition.template']) {
-          const t = captureMap['definition.template'];
-          spec = findFirstDescendant(t, 'class_specifier') ?? findFirstDescendant(t, 'struct_specifier');
-        }
-        if (spec && !hasClassOrStructBody(spec)) continue;
-      }
-
+      const nodeName = nameNode ? nameNode.text : 'init';
       const definitionNode = getDefinitionNodeFromCaptures(captureMap);
       const startLine = definitionNode ? definitionNode.startPosition.row : (nameNode ? nameNode.startPosition.row : 0);
       const nodeId = generateId(nodeLabel, `${file.path}:${nodeName}`);

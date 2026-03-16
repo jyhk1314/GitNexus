@@ -23,6 +23,7 @@ import { NODE_TABLES } from '../core/lbug/schema.js';
 import { GraphNode, GraphRelationship } from '../core/graph/types.js';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
+import { isGitRepo } from '../storage/git.js';
 // Embedding imports are lazy (dynamic import) to avoid loading onnxruntime-node
 // at server startup — crashes on unsupported Node ABI versions (#89)
 import { LocalBackend } from '../mcp/local/local-backend.js';
@@ -179,6 +180,20 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
   };
 
   app.post('/api/repos/clone-analyze', async (req, res) => {
+    // 立即建立流式响应连接，避免前端长时间等待
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    const send = (data: object) => {
+      try {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch (e) {
+        // 客户端可能已断开连接
+      }
+    };
+
     try {
       const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
       const token = typeof req.body?.token === 'string' ? req.body.token.trim() : undefined;
@@ -216,27 +231,106 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
 
       await fs.mkdir(codeDir, { recursive: true });
 
+      // 发送clone开始事件
+      send({ type: 'progress', phase: 'cloning', percent: 0 });
+      console.log('[clone-analyze] clone start:', url, branch ? `(branch: ${branch})` : '(default branch)');
+
       const cloneUrl = token
         ? `${parsed.protocol}//${encodeURIComponent(token)}@${parsed.host}${parsed.pathname}${url.endsWith('.git') ? '' : '.git'}`
         : url.replace(/\.git$/i, '') + (url.match(/\.git$/i) ? '' : '.git');
-      const cloneArgs = ['clone', '--depth', '1'];
+      const cloneArgs = ['clone', '--depth', '1', '--progress'];
       if (branch) {
         cloneArgs.push('--branch', branch, '--single-branch');
       }
       cloneArgs.push(cloneUrl, targetPath);
-      console.log('[clone-analyze] clone start:', url, branch ? `(branch: ${branch})` : '(default branch)');
-      const cloneResult = spawnSync('git', cloneArgs, {
-        stdio: 'pipe',
-        encoding: 'utf-8',
-      });
-      if (cloneResult.status !== 0) {
-        const stderr = cloneResult.stderr || cloneResult.error?.message || '';
-        console.error('[clone-analyze] git clone failed:', stderr);
-        res.status(500).json({ error: 'Clone failed', details: stderr.slice(0, 500) });
-        return;
-      }
-      console.log('[clone-analyze] clone done:', targetPath);
 
+      // 使用spawn而不是spawnSync，以便在clone过程中发送进度更新
+      const cloneProcess = spawn('git', cloneArgs, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let cloneOutput = '';
+      let cloneStartTime = Date.now();
+      const cloneHeartbeatInterval = setInterval(() => {
+        const elapsed = Math.round((Date.now() - cloneStartTime) / 1000);
+        send({ type: 'progress', phase: 'cloning', percent: 1, detail: `Cloning... (${elapsed}s)` });
+      }, 2000); // 每2秒发送一次心跳
+
+      if (cloneProcess.stdout) {
+        cloneProcess.stdout.on('data', (chunk) => {
+          const output = chunk.toString('utf-8');
+          cloneOutput += output;
+          // git clone --progress 会输出类似 "Receiving objects: 50% (100/200)" 的进度
+          const progressMatch = output.match(/(\d+)%/);
+          if (progressMatch) {
+            const percent = Math.min(3, parseInt(progressMatch[1], 10) / 100); // clone阶段占0-3%
+            send({ type: 'progress', phase: 'cloning', percent, detail: output.trim() });
+          }
+        });
+      }
+
+      if (cloneProcess.stderr) {
+        cloneProcess.stderr.on('data', (chunk) => {
+          const output = chunk.toString('utf-8');
+          cloneOutput += output;
+          // git clone --progress 的进度信息也会输出到stderr
+          const progressMatch = output.match(/(\d+)%/);
+          if (progressMatch) {
+            const percent = Math.min(3, parseInt(progressMatch[1], 10) / 100);
+            send({ type: 'progress', phase: 'cloning', percent, detail: output.trim() });
+          }
+        });
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        cloneProcess.on('close', async (code) => {
+          clearInterval(cloneHeartbeatInterval);
+          if (code !== 0) {
+            const stderr = cloneOutput || (cloneProcess.stderr ? cloneProcess.stderr.read()?.toString('utf-8') : '') || '';
+            console.error('[clone-analyze] git clone failed:', stderr);
+            
+            // 检查是否是目录已存在的错误
+            if (stderr.includes('already exists and is not an empty directory')) {
+              // 检查目录是否是有效的 git 仓库
+              if (isGitRepo(targetPath)) {
+                // 检查是否已经在 registry 中
+                const entries = await readRegistry();
+                const existsInRegistry = entries.some((e) => pathEquals(e.path, targetPath));
+                
+                if (existsInRegistry) {
+                  console.log('[clone-analyze] Directory exists and is in registry, returning alreadyExists');
+                  send({ type: 'done', ok: true, alreadyExists: true, path: targetPath, message: 'Repo already exists and is indexed' });
+                  resolve();
+                  return;
+                } else {
+                  // 目录存在且是有效的 git 仓库，但不在 registry 中
+                  // 返回 alreadyExists，让前端跳转到 server 模式
+                  console.log('[clone-analyze] Directory exists and is a valid git repo, but not in registry. Returning alreadyExists to trigger server mode.');
+                  send({ type: 'done', ok: true, alreadyExists: true, path: targetPath, message: 'Repo directory exists, please use server mode' });
+                  resolve();
+                  return;
+                }
+              }
+            }
+            
+            send({ type: 'done', ok: false, error: 'Clone failed', details: stderr.slice(0, 500) });
+            reject(new Error('Clone failed: ' + stderr.slice(0, 500)));
+          } else {
+            console.log('[clone-analyze] clone done:', targetPath);
+            send({ type: 'clone_done', path: targetPath });
+            resolve();
+          }
+        });
+        cloneProcess.on('error', (err) => {
+          clearInterval(cloneHeartbeatInterval);
+          console.error('[clone-analyze] git clone error:', err);
+          send({ type: 'done', ok: false, error: err.message });
+          reject(err);
+        });
+      });
+
+      // UTF-8转换阶段
+      send({ type: 'progress', phase: 'converting', percent: 3 });
       const __dirnameServer = path.dirname(fileURLToPath(import.meta.url));
       const pkgRoot = path.resolve(__dirnameServer, '../..');
       const scriptCandidates = [
@@ -273,16 +367,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       }
 
       console.log('[clone-analyze] -> starting analyze');
-
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('X-Accel-Buffering', 'no');
-      res.flushHeaders?.();
-      const send = (data: object) => {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-      };
-      send({ type: 'clone_done', path: targetPath });
+      send({ type: 'progress', phase: 'analyzing', percent: 5 });
 
       const cliPath = path.join(__dirnameServer, '../cli/index.js');
       const nodeOptions = (process.env.NODE_OPTIONS || '').trim();
@@ -310,6 +395,16 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         doneSent = true;
         res.end();
       };
+
+      // 过滤stderr中的噪音日志
+      const shouldFilterStderr = (msg: string): boolean => {
+        // 过滤掉"Unable to determine content-length"警告（来自@huggingface/transformers）
+        if (msg.includes('Unable to determine content-length') || msg.includes('Will expand buffer when needed')) {
+          return true;
+        }
+        return false;
+      };
+
       rl.on('line', (line) => {
         if (doneSent) return;
         const trimmed = line.trim();
@@ -322,23 +417,30 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
           } else {
             const phase = data.phase ?? '';
             const percent = typeof data.percent === 'number' ? data.percent : 0;
-            if (phase !== lastPhase || percent !== lastPercent) {
+            // 将analyze的进度映射到5-95%范围（clone占0-5%，analyze占5-95%）
+            // analyze.ts内部进度：pipeline(0-60%), lbug(60-85%), fts(85-90%), embedding(90-98%), finalize(98-100%)
+            // 映射到：pipeline(5-59%), lbug(59-82.5%), fts(82.5-86%), embedding(86-93.2%), finalize(93.2-95%)
+            const mappedPercent = 5 + Math.round(percent * 0.9);
+            if (phase !== lastPhase || mappedPercent !== lastPercent) {
               lastPhase = phase;
-              lastPercent = percent;
-              send({ type: 'progress', phase, percent });
+              lastPercent = mappedPercent;
+              send({ type: 'progress', phase, percent: mappedPercent });
             }
           }
         } catch {
           if (trimmed !== lastPhase || 0 !== lastPercent) {
             lastPhase = trimmed;
-            lastPercent = 0;
-            send({ type: 'progress', phase: trimmed, percent: 0 });
+            lastPercent = 5;
+            send({ type: 'progress', phase: trimmed, percent: 5 });
           }
         }
       });
       child.stderr?.on('data', (chunk) => {
         const msg = chunk.toString();
-        process.stderr.write('[clone-analyze] ' + msg);
+        // 过滤噪音日志
+        if (!shouldFilterStderr(msg)) {
+          process.stderr.write('[clone-analyze] ' + msg);
+        }
       });
       child.on('close', (code) => {
         console.log('[clone-analyze] analyze exit code:', code, targetPath);
@@ -356,7 +458,12 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       });
     } catch (err: any) {
       console.error('[clone-analyze]', err);
-      res.status(500).json({ error: err?.message || String(err) });
+      if (!res.headersSent) {
+        res.status(500).json({ error: err?.message || String(err) });
+      } else {
+        send({ type: 'done', ok: false, error: err?.message || String(err) });
+        res.end();
+      }
     }
   });
 

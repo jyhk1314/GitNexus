@@ -198,16 +198,67 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
     const aborter = new AbortController();
     abortControllerRef.current = aborter;
 
+    // 用于跟踪是否收到 already_exists
+    let receivedAlreadyExists = false;
+
     try {
       // 走后端 clone-analyze：代码落在 serve 机器的 ginexus_code 目录
       await cloneAnalyzeOnServer(
         proxyTrimmed,
         localGitUrl,
         localGitToken.trim() || undefined,
-        (phase, percent) => setCloneProgress({ phase, percent }),
+        (phase, percent) => {
+          setCloneProgress({ phase, percent });
+          if (phase === 'already_exists') {
+            receivedAlreadyExists = true;
+          }
+        },
         aborter.signal,
         localGitBranch.trim() || undefined
       );
+
+      // 如果收到 already_exists，自动跳转到 server 模式
+      if (receivedAlreadyExists) {
+        setIsCloning(false);
+        // 切换到 server tab
+        setActiveTab('server');
+        // 设置 server URL
+        setServerUrl(proxyTrimmed);
+        localStorage.setItem('gitnexus-server-url', proxyTrimmed);
+        // 解析仓库名
+        let repoName: string | undefined;
+        try {
+          const u = new URL(localGitUrl);
+          const segs = u.pathname.split('/').filter(Boolean);
+          const baseName = segs.length ? segs[segs.length - 1].replace(/\.git$/i, '') : undefined;
+          const branchTrimmed = localGitBranch.trim();
+          if (baseName && branchTrimmed) {
+            const branchSuffix = branchTrimmed.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            repoName = `${baseName}_${branchSuffix}`;
+          } else {
+            repoName = baseName;
+          }
+          if (repoName) {
+            setServerRepoName(repoName);
+            localStorage.setItem('gitnexus-server-repo', repoName);
+          }
+        } catch {
+          // 忽略解析错误
+        }
+        setError(null);
+        // 自动连接 server
+        setCloneProgress({ phase: 'connecting', percent: 0 });
+        const result = await connectToServer(
+          proxyTrimmed,
+          (phase, downloaded, total) => setCloneProgress({ phase, percent: (downloaded / (total || 1)) * 100 }),
+          aborter.signal,
+          repoName
+        );
+        if (onServerConnect) {
+          onServerConnect(result, proxyTrimmed);
+        }
+        return; // 提前返回，不继续执行后续代码
+      }
 
       setLocalGitToken('');
       localStorage.setItem('gitnexus-localgit-url', localGitUrl.trim());
@@ -759,7 +810,13 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploa
                     <Loader2 className="w-5 h-5 animate-spin" />
                     {cloneProgress.phase === 'already_exists'
                       ? '仓库已存在，正在连接…'
-                      : `克隆并分析中 ${cloneProgress.percent}%`}
+                      : cloneProgress.phase === 'cloning' || cloneProgress.phase === 'converting'
+                        ? `正在克隆... ${cloneProgress.percent}%`
+                        : cloneProgress.phase === 'analyzing' || cloneProgress.phase === 'Scanning files' || cloneProgress.phase === 'Building structure' || cloneProgress.phase === 'Parsing code'
+                          ? `正在分析代码... ${cloneProgress.percent}%`
+                          : cloneProgress.phase === 'Loading embedding model...' || cloneProgress.phase === 'loading-model' || cloneProgress.phase.startsWith('Embedding')
+                            ? `正在生成向量... ${cloneProgress.percent}%`
+                            : `克隆并分析中 ${cloneProgress.percent}%`}
                   </>
                 ) : (
                   <>
