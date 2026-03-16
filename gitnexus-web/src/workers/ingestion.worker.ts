@@ -172,7 +172,8 @@ const workerApi = {
       console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
     }
     
-    // Load graph into KuzuDB for querying (optional - gracefully degrades)
+    // Load graph into KuzuDB for querying (required for embeddings; optional for BM25/graph view)
+    let kuzuReady = false;
     try {
       onProgress({
         phase: 'complete',
@@ -187,14 +188,17 @@ const workerApi = {
       
       const kuzu = await getKuzuAdapter();
       await kuzu.loadGraphToKuzu(result.graph, result.fileContents);
+      kuzuReady = true;
       
       if (import.meta.env.DEV) {
         const stats = await kuzu.getKuzuStats();
         console.log('KuzuDB loaded:', stats);
         console.log('📁 Stored', storedFileContents.size, 'files for grep/read tools');
       }
-    } catch {
-      // KuzuDB is optional - silently continue without it
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.warn('KuzuDB load failed (vector search will be unavailable):', err);
+      }
     }
     
     // Store clustering config for background enrichment (runs after graph loads)
@@ -204,7 +208,7 @@ const workerApi = {
     }
     
     // Convert to serializable format for transfer back to main thread
-    return serializePipelineResult(result);
+    return serializePipelineResult(result, kuzuReady);
   },
 
   /**
@@ -276,7 +280,8 @@ const workerApi = {
       console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
     }
     
-    // Load graph into KuzuDB for querying (optional - gracefully degrades)
+    // Load graph into KuzuDB for querying (required for embeddings; optional for BM25/graph view)
+    let kuzuReady = false;
     try {
       onProgress({
         phase: 'complete',
@@ -291,14 +296,17 @@ const workerApi = {
       
       const kuzu = await getKuzuAdapter();
       await kuzu.loadGraphToKuzu(result.graph, result.fileContents);
+      kuzuReady = true;
       
       if (import.meta.env.DEV) {
         const stats = await kuzu.getKuzuStats();
         console.log('KuzuDB loaded:', stats);
         console.log('📁 Stored', storedFileContents.size, 'files for grep/read tools');
       }
-    } catch {
-      // KuzuDB is optional - silently continue without it
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.warn('KuzuDB load failed (vector search will be unavailable):', err);
+      }
     }
     
     // Store clustering config for background enrichment (runs after graph loads)
@@ -308,7 +316,7 @@ const workerApi = {
     }
     
     // Convert to serializable format for transfer back to main thread
-    return serializePipelineResult(result);
+    return serializePipelineResult(result, kuzuReady);
   },
 
   // ============================================================

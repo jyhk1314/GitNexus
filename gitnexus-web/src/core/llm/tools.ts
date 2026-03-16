@@ -439,7 +439,9 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
   // ============================================================================
   
   const readTool = tool(
-    async ({ filePath }: { filePath: string }) => {
+    async (args: { filePath?: string; path?: string; file_path?: string }) => {
+      const filePath = args.filePath ?? args.path ?? args.file_path ?? '';
+      if (!filePath) return 'Error: missing file path. Use filePath (e.g. "src/utils.ts").';
       const normalizedRequest = filePath.replace(/\\/g, '/').toLowerCase();
       
       // Try exact match first
@@ -510,7 +512,11 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
       name: 'read',
       description: 'Read the full content of a file. Use to see source code after finding files via search or grep.',
       schema: z.object({
-        filePath: z.string().describe('File path to read (can be partial like "src/utils.ts")'),
+        filePath: z.string().optional().describe('File path to read (e.g. src/utils.ts)'),
+        path: z.string().optional().describe('Alias for filePath'),
+        file_path: z.string().optional().describe('Snake_case alias for filePath'),
+      }).refine(data => !!(data.filePath ?? data.path ?? data.file_path), {
+        message: 'Provide at least one of: filePath, path, or file_path',
       }),
     }
   );

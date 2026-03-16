@@ -102,67 +102,56 @@ export const analyzeCommand = async (
     return;
   }
 
-  // Single progress bar for entire pipeline
-  const bar = new cliProgress.SingleBar({
-    format: '  {bar} {percentage}% | {phase}',
-    barCompleteChar: '\u2588',
-    barIncompleteChar: '\u2591',
-    hideCursor: true,
-    barGlue: '',
-    autopadding: true,
-    clearOnComplete: false,
-    stopOnComplete: false,
-  }, cliProgress.Presets.shades_grey);
-
-  bar.start(100, 0, { phase: 'Initializing...' });
-
-  // Graceful SIGINT handling — clean up resources and exit
-  let aborted = false;
-  const sigintHandler = () => {
-    if (aborted) process.exit(1); // Second Ctrl-C: force exit
-    aborted = true;
-    bar.stop();
-    console.log('\n  Interrupted — cleaning up...');
-    closeKuzu().catch(() => {}).finally(() => process.exit(130));
-  };
-  process.on('SIGINT', sigintHandler);
-
-  // Route all console output through bar.log() so the bar doesn't stamp itself
-  // multiple times when other code writes to stdout/stderr mid-render.
+  const progressMode = !!process.env.GITNEXUS_PROGRESS;
+  let bar: cliProgress.SingleBar | null = null;
+  let elapsedTimer: ReturnType<typeof setInterval> | null = null;
   const origLog = console.log.bind(console);
   const origWarn = console.warn.bind(console);
   const origError = console.error.bind(console);
-  const barLog = (...args: any[]) => {
-    // Clear the bar line, print the message, then let the next bar.update redraw
-    process.stdout.write('\x1b[2K\r');
-    origLog(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
-  };
-  console.log = barLog;
-  console.warn = barLog;
-  console.error = barLog;
-
-  // Track elapsed time per phase — both updateBar and the interval use the
-  // same format so they don't flicker against each other.
   let lastPhaseLabel = 'Initializing...';
   let phaseStart = Date.now();
 
-  /** Update bar with phase label + elapsed seconds (shown after 3s). */
+  if (!progressMode) {
+    bar = new cliProgress.SingleBar({
+      format: '  {bar} {percentage}% | {phase}',
+      barCompleteChar: '\u2588',
+      barIncompleteChar: '\u2591',
+      hideCursor: true,
+      barGlue: '',
+      autopadding: true,
+      clearOnComplete: false,
+      stopOnComplete: false,
+    }, cliProgress.Presets.shades_grey);
+    bar.start(100, 0, { phase: 'Initializing...' });
+    process.on('SIGINT', () => {
+      bar?.stop();
+      origLog('\n  Interrupted — cleaning up...');
+      closeKuzu().catch(() => {}).finally(() => process.exit(130));
+    });
+    const barLog = (...args: any[]) => {
+      process.stdout.write('\x1b[2K\r');
+      origLog(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
+    };
+    console.log = barLog;
+    console.warn = barLog;
+    console.error = barLog;
+    elapsedTimer = setInterval(() => {
+      const elapsed = Math.round((Date.now() - phaseStart) / 1000);
+      if (elapsed >= 3 && bar) bar.update({ phase: `${lastPhaseLabel} (${elapsed}s)` });
+    }, 1000);
+  }
+
+  /** Update progress: in progressMode output JSON line for API/SSE; else update bar. */
   const updateBar = (value: number, phaseLabel: string) => {
     if (phaseLabel !== lastPhaseLabel) { lastPhaseLabel = phaseLabel; phaseStart = Date.now(); }
-    const elapsed = Math.round((Date.now() - phaseStart) / 1000);
-    const display = elapsed >= 3 ? `${phaseLabel} (${elapsed}s)` : phaseLabel;
-    bar.update(value, { phase: display });
-  };
-
-  // Tick elapsed seconds for phases with infrequent progress callbacks
-  // (e.g. CSV streaming, FTS indexing). Uses the same display format as
-  // updateBar so there's no flickering.
-  const elapsedTimer = setInterval(() => {
-    const elapsed = Math.round((Date.now() - phaseStart) / 1000);
-    if (elapsed >= 3) {
-      bar.update({ phase: `${lastPhaseLabel} (${elapsed}s)` });
+    if (progressMode) {
+      process.stdout.write(JSON.stringify({ phase: phaseLabel, percent: value }) + '\n');
+    } else if (bar) {
+      const elapsed = Math.round((Date.now() - phaseStart) / 1000);
+      const display = elapsed >= 3 ? `${phaseLabel} (${elapsed}s)` : phaseLabel;
+      bar.update(value, { phase: display });
     }
-  }, 1000);
+  };
 
   const t0Global = Date.now();
 
@@ -257,6 +246,7 @@ export const analyzeCommand = async (
 
   if (!embeddingSkipped) {
     updateBar(90, 'Loading embedding model...');
+    if (progressMode) process.stderr.write('[embedding] Loading model and generating embeddings...\n');
     const t0Emb = Date.now();
     const { runEmbeddingPipeline } = await import('../core/embeddings/embedding-pipeline.js');
     await runEmbeddingPipeline(
@@ -271,6 +261,7 @@ export const analyzeCommand = async (
       cachedEmbeddingNodeIds.size > 0 ? cachedEmbeddingNodeIds : undefined,
     );
     embeddingTime = ((Date.now() - t0Emb) / 1000).toFixed(1);
+    if (progressMode) process.stderr.write(`[embedding] Done in ${embeddingTime}s\n`);
   }
 
   // ── Phase 5: Finalize (98–100%) ───────────────────────────────────
@@ -319,43 +310,57 @@ export const analyzeCommand = async (
 
   const totalTime = ((Date.now() - t0Global) / 1000).toFixed(1);
 
-  clearInterval(elapsedTimer);
-  process.removeListener('SIGINT', sigintHandler);
-
+  if (elapsedTimer) clearInterval(elapsedTimer);
   console.log = origLog;
   console.warn = origWarn;
   console.error = origError;
 
-  bar.update(100, { phase: 'Done' });
-  bar.stop();
-
-  // ── Summary ───────────────────────────────────────────────────────
-  const embeddingsCached = cachedEmbeddings.length > 0;
-  console.log(`\n  Repository indexed successfully (${totalTime}s)${embeddingsCached ? ` [${cachedEmbeddings.length} embeddings cached]` : ''}\n`);
-  console.log(`  ${stats.nodes.toLocaleString()} nodes | ${stats.edges.toLocaleString()} edges | ${pipelineResult.communityResult?.stats.totalCommunities || 0} clusters | ${pipelineResult.processResult?.stats.totalProcesses || 0} flows`);
-  console.log(`  KuzuDB ${kuzuTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`);
-  console.log(`  ${repoPath}`);
-
-  if (aiContext.files.length > 0) {
-    console.log(`  Context: ${aiContext.files.join(', ')}`);
+  if (progressMode) {
+    process.stdout.write(JSON.stringify({ done: true, path: repoPath }) + '\n');
+    // Summary to stderr only (API consumes stdout; avoid summary as fake progress)
+    const embeddingsCached = cachedEmbeddings.length > 0;
+    const summary = [
+      `Repository indexed successfully (${totalTime}s)${embeddingsCached ? ` [${cachedEmbeddings.length} embeddings cached]` : ''}`,
+      `${stats.nodes.toLocaleString()} nodes | ${stats.edges.toLocaleString()} edges | ${pipelineResult.communityResult?.stats.totalCommunities || 0} clusters | ${pipelineResult.processResult?.stats.totalProcesses || 0} flows`,
+      `KuzuDB ${kuzuTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`,
+      repoPath,
+    ];
+    summary.forEach(line => process.stderr.write('  ' + line + '\n'));
+    if (aiContext.files.length > 0) process.stderr.write('  Context: ' + aiContext.files.join(', ') + '\n');
+    if (kuzuWarnings.length > 0) {
+      const totalFallback = kuzuWarnings.reduce((sum, w) => {
+        const m = w.match(/\((\d+) edges\)/);
+        return sum + (m ? parseInt(m[1]) : 0);
+      }, 0);
+      process.stderr.write(`  Note: ${totalFallback} edges across ${kuzuWarnings.length} types inserted via fallback\n`);
+    }
+  } else if (bar) {
+    bar.update(100, { phase: 'Done' });
+    bar.stop();
   }
 
-  // Show a quiet summary if some edge types needed fallback insertion
-  if (kuzuWarnings.length > 0) {
-    const totalFallback = kuzuWarnings.reduce((sum, w) => {
-      const m = w.match(/\((\d+) edges\)/);
-      return sum + (m ? parseInt(m[1]) : 0);
-    }, 0);
-    console.log(`  Note: ${totalFallback} edges across ${kuzuWarnings.length} types inserted via fallback (schema will be updated in next release)`);
+  if (!progressMode) {
+    // ── Summary (stdout only when not progressMode) ─────────────────────
+    const embeddingsCached = cachedEmbeddings.length > 0;
+    console.log(`\n  Repository indexed successfully (${totalTime}s)${embeddingsCached ? ` [${cachedEmbeddings.length} embeddings cached]` : ''}\n`);
+    console.log(`  ${stats.nodes.toLocaleString()} nodes | ${stats.edges.toLocaleString()} edges | ${pipelineResult.communityResult?.stats.totalCommunities || 0} clusters | ${pipelineResult.processResult?.stats.totalProcesses || 0} flows`);
+    console.log(`  KuzuDB ${kuzuTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`);
+    console.log(`  ${repoPath}`);
+    if (aiContext.files.length > 0) console.log(`  Context: ${aiContext.files.join(', ')}`);
+    if (kuzuWarnings.length > 0) {
+      const totalFallback = kuzuWarnings.reduce((sum, w) => {
+        const m = w.match(/\((\d+) edges\)/);
+        return sum + (m ? parseInt(m[1]) : 0);
+      }, 0);
+      console.log(`  Note: ${totalFallback} edges across ${kuzuWarnings.length} types inserted via fallback (schema will be updated in next release)`);
+    }
+    try {
+      await fs.access(getGlobalRegistryPath());
+    } catch {
+      console.log('\n  Tip: Run `gitnexus setup` to configure MCP for your editor.');
+    }
+    console.log('');
   }
-
-  try {
-    await fs.access(getGlobalRegistryPath());
-  } catch {
-    console.log('\n  Tip: Run `gitnexus setup` to configure MCP for your editor.');
-  }
-
-  console.log('');
 
   // ONNX Runtime registers native atexit hooks that segfault during process
   // shutdown on macOS (#38) and some Linux configs (#40). Force-exit to

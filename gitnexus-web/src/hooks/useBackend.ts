@@ -11,7 +11,7 @@ import {
 
 const LS_URL_KEY = 'gitnexus-backend-url';
 const LS_REPO_KEY = 'gitnexus-backend-repo';
-const DEFAULT_URL = 'http://localhost:4747';
+const DEFAULT_URL = 'http://localhost:6660';
 
 // ── Debounce delay ───────────────────────────────────────────────────────────
 

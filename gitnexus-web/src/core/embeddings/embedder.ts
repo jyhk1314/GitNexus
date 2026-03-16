@@ -96,6 +96,11 @@ export const initEmbedder = async (
     try {
       // Configure transformers.js environment
       env.allowLocalModels = false;
+      // 浏览器/Worker 内用同源代理避免 CORS；Node 内直连镜像
+      const origin =
+        (typeof window !== 'undefined' && (window as any).location?.origin) ||
+        (typeof self !== 'undefined' && (self as any).location?.origin);
+      env.remoteHost = origin ? `${origin}/hf-mirror/` : 'https://hf-mirror.com/';
       
       if (import.meta.env.DEV) {
         console.log(`🧠 Loading embedding model: ${finalConfig.modelId}`);

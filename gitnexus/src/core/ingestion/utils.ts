@@ -38,9 +38,9 @@ export const getLanguageFromFilename = (filename: string): SupportedLanguages | 
   // Java
   if (filename.endsWith('.java')) return SupportedLanguages.Java;
   // C (source and headers)
-  if (filename.endsWith('.c') || filename.endsWith('.h')) return SupportedLanguages.C;
+  // if (filename.endsWith('.c') || filename.endsWith('.h')) return SupportedLanguages.C;
   // C++ (all common extensions)
-  if (filename.endsWith('.cpp') || filename.endsWith('.cc') || filename.endsWith('.cxx') ||
+  if (filename.endsWith('.c') || filename.endsWith('.h') || filename.endsWith('.cpp') || filename.endsWith('.cc') || filename.endsWith('.cxx') ||
       filename.endsWith('.hpp') || filename.endsWith('.hxx') || filename.endsWith('.hh')) return SupportedLanguages.CPlusPlus;
   // C#
   if (filename.endsWith('.cs')) return SupportedLanguages.CSharp;

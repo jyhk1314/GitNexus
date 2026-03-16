@@ -21,7 +21,7 @@ export interface BackendRepo {
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
-let backendUrl = 'http://localhost:4747';
+let backendUrl = 'http://localhost:6660';
 
 export const setBackendUrl = (url: string): void => {
   backendUrl = url.replace(/\/$/, '');

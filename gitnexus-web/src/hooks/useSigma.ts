@@ -57,6 +57,8 @@ interface UseSigmaOptions {
   blastRadiusNodeIds?: Set<string>;
   animatedNodes?: Map<string, NodeAnimation>;
   visibleEdgeTypes?: EdgeType[];
+  /** When true, run layout automatically when graph is set. Default: false. */
+  autoLayoutOnSetGraph?: boolean;
 }
 
 interface UseSigmaReturn {
@@ -66,7 +68,7 @@ interface UseSigmaReturn {
   zoomIn: () => void;
   zoomOut: () => void;
   resetZoom: () => void;
-  focusNode: (nodeId: string) => void;
+  focusNode: (nodeId: string, force?: boolean) => void;
   isLayoutRunning: boolean;
   startLayout: () => void;
   stopLayout: () => void;
@@ -551,29 +553,32 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     sigma.setGraph(newGraph);
     setSelectedNode(null);
 
-    runLayout(newGraph);
+    if (options.autoLayoutOnSetGraph) {
+      runLayout(newGraph);
+    }
     sigma.getCamera().animatedReset({ duration: 500 });
-  }, [runLayout, setSelectedNode]);
+  }, [runLayout, setSelectedNode, options.autoLayoutOnSetGraph]);
 
-  const focusNode = useCallback((nodeId: string) => {
+  const focusNode = useCallback((nodeId: string, force?: boolean) => {
     const sigma = sigmaRef.current;
     const graph = graphRef.current;
     if (!sigma || !graph || !graph.hasNode(nodeId)) return;
 
-    // Skip if already focused on this node (prevents double-click issues)
     const alreadySelected = selectedNodeRef.current === nodeId;
     
     // Set selection state directly (without the camera nudge from setSelectedNode)
     selectedNodeRef.current = nodeId;
     setSelectedNodeState(nodeId);
     
-    // Only animate camera if selecting a new node
-    if (!alreadySelected) {
-      const nodeAttrs = graph.getNodeAttributes(nodeId);
-      sigma.getCamera().animate(
-        { x: nodeAttrs.x, y: nodeAttrs.y, ratio: 0.15 },
-        { duration: 400 }
-      );
+    // Animate camera if selecting a new node, or if forced (e.g. "Focus on Selected" button)
+    if (!alreadySelected || force) {
+      const nodeDisplayData = sigma.getNodeDisplayData(nodeId);
+      if (nodeDisplayData) {
+        sigma.getCamera().animate(
+          { ...nodeDisplayData, x: nodeDisplayData.x - 0.05, ratio: 0.15 },
+          { duration: 400 }
+        );
+      }
     }
     
     sigma.refresh();

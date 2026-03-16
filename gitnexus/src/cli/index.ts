@@ -15,6 +15,7 @@ import { augmentCommand } from './augment.js';
 import { wikiCommand } from './wiki.js';
 import { queryCommand, contextCommand, impactCommand, cypherCommand } from './tool.js';
 import { evalServerCommand } from './eval-server.js';
+import { structureCommand } from './wiki-structure.js';
 import { createRequire } from 'node:module';
 const _require = createRequire(import.meta.url);
 const pkg = _require('../../package.json');
@@ -38,10 +39,18 @@ program
   .action(analyzeCommand);
 
 program
+  .command('add <path>')
+  .description('Add and index a local or private Git repo (接入本地/私有化 Git 仓库并建索引)')
+  .option('-f, --force', 'Force full re-index even if up to date')
+  .option('--embeddings', 'Enable embedding generation for semantic search (off by default)')
+  .action((inputPath: string, opts: { force?: boolean; embeddings?: boolean }) => analyzeCommand(inputPath, opts));
+
+program
   .command('serve')
   .description('Start local HTTP server for web UI connection')
-  .option('-p, --port <port>', 'Port number', '4747')
+  .option('-p, --port <port>', 'Port number', '6660')
   .option('--host <host>', 'Bind address (default: 127.0.0.1, use 0.0.0.0 for remote access)')
+  .option('--embeddings', 'Enable embeddings when clone-analyze runs (vector search)')
   .action(serveCommand);
 
 program
@@ -76,6 +85,8 @@ program
   .option('--concurrency <n>', 'Parallel LLM calls (default: 3)', '3')
   .option('--gist', 'Publish wiki as a public GitHub Gist after generation')
   .action(wikiCommand);
+
+program.addCommand(structureCommand);  // 添加这行
 
 program
   .command('augment <pattern>')

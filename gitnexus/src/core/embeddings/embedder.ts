@@ -108,6 +108,8 @@ export const initEmbedder = async (
     try {
       // Configure transformers.js environment
       env.allowLocalModels = false;
+      // 国内镜像，避免 Hugging Face 直连慢或不可用
+      env.remoteHost = 'https://hf-mirror.com/';
       
       const isDev = process.env.NODE_ENV === 'development';
       if (isDev) {

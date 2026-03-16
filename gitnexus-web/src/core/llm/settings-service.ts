@@ -326,3 +326,51 @@ export const fetchOpenRouterModels = async (): Promise<Array<{ id: string; name:
   }
 };
 
+/**
+ * Fetch models from OpenAI-compatible API (GET /models or /v1/models)
+ */
+export const fetchOpenAIModels = async (
+  apiKey: string,
+  baseUrl?: string
+): Promise<Array<{ id: string; name: string }>> => {
+  const base = (baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const url = `${base}/models`;
+  const effectiveKey = apiKey?.trim() || 'local';
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${effectiveKey}` },
+    });
+    if (!response.ok) throw new Error(`Failed to fetch models: ${response.status}`);
+    const data = await response.json();
+    const list = data.data ?? data.models ?? [];
+    return list.map((m: any) => ({
+      id: String(m.id ?? m.name ?? '').trim(),
+      name: String(m.name ?? m.id ?? '').trim() || String(m.id ?? m.name ?? ''),
+    })).filter((m: { id: string }) => m.id);
+  } catch (error) {
+    console.error('Error fetching OpenAI models:', error);
+    return [];
+  }
+};
+
+/**
+ * Fetch models from Ollama (GET /api/tags)
+ */
+export const fetchOllamaModels = async (baseUrl?: string): Promise<Array<{ id: string; name: string }>> => {
+  const base = (baseUrl || 'http://localhost:11434').replace(/\/$/, '');
+  const url = `${base}/api/tags`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch models: ${response.status}`);
+    const data = await response.json();
+    const list = data.models ?? [];
+    return list.map((m: any) => {
+      const id = String(m.name ?? m.model ?? '').trim();
+      return { id, name: id };
+    }).filter((m: { id: string }) => m.id);
+  } catch (error) {
+    console.error('Error fetching Ollama models:', error);
+    return [];
+  }
+};
+

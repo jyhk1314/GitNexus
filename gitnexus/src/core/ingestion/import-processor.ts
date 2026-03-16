@@ -319,6 +319,10 @@ function suffixResolve(
   if (index) {
     for (let i = 0; i < pathParts.length; i++) {
       const suffix = pathParts.slice(i).join('/');
+      // C/C++ etc.: include path may already have extension (e.g. "ZmdbWebMonitor.h").
+      // Try exact suffix first so we don't only match suffix+ext (e.g. "ZmdbWebMonitor.h.h").
+      const exact = index.get(suffix) || index.getInsensitive(suffix);
+      if (exact) return exact;
       for (const ext of EXTENSIONS) {
         const suffixWithExt = suffix + ext;
         const result = index.get(suffixWithExt) || index.getInsensitive(suffixWithExt);
@@ -331,11 +335,16 @@ function suffixResolve(
   // Fallback: linear scan (for backward compatibility)
   for (let i = 0; i < pathParts.length; i++) {
     const suffix = pathParts.slice(i).join('/');
+    const suffixPattern = '/' + suffix;
+    let matchIdx = normalizedFileList.findIndex(filePath =>
+      filePath.endsWith(suffixPattern) || filePath.toLowerCase().endsWith(suffixPattern.toLowerCase())
+    );
+    if (matchIdx !== -1) return allFileList[matchIdx];
     for (const ext of EXTENSIONS) {
       const suffixWithExt = suffix + ext;
-      const suffixPattern = '/' + suffixWithExt;
-      const matchIdx = normalizedFileList.findIndex(filePath =>
-        filePath.endsWith(suffixPattern) || filePath.toLowerCase().endsWith(suffixPattern.toLowerCase())
+      const suffixPatternWithExt = '/' + suffixWithExt;
+      matchIdx = normalizedFileList.findIndex(filePath =>
+        filePath.endsWith(suffixPatternWithExt) || filePath.toLowerCase().endsWith(suffixPatternWithExt.toLowerCase())
       );
       if (matchIdx !== -1) {
         return allFileList[matchIdx];
@@ -416,9 +425,25 @@ const resolveImportPath = (
     // Fall through to generic resolution if Rust-specific didn't match
   }
 
-  // ---- Generic relative import resolution (./ and ../) ----
   const currentDir = currentFile.split('/').slice(0, -1);
   const parts = importPath.split('/');
+
+  // ---- C/C++: same-directory first for "file.h" (no leading . or /) ----
+  // #include "ZmdbWebMonitor.h" should resolve to current file's dir + filename.
+  if (
+    (language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus) &&
+    !importPath.startsWith('<')
+  ) {
+    const sameDirPath = currentDir.length ? currentDir.join('/') + '/' + importPath : importPath;
+    if (allFiles.has(sameDirPath)) return cache(sameDirPath);
+    const withExt = tryResolveWithExtensions(
+      sameDirPath.includes('.') ? sameDirPath.replace(/\.[^.]+$/, '') : sameDirPath,
+      allFiles,
+    );
+    if (withExt) return cache(withExt);
+  }
+
+  // ---- Generic relative import resolution (./ and ../) ----
 
   for (const part of parts) {
     if (part === '.') continue;

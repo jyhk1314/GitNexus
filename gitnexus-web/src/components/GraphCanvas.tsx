@@ -57,6 +57,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     if (node) {
       setSelectedNode(node);
       openCodePanel();
+      // 同时让摄像机居中到当前节点
+      focusNode(nodeId);
     }
   }, [graph, setSelectedNode, openCodePanel]);
 
@@ -101,7 +103,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
   // Expose focusNode to parent via ref
   useImperativeHandle(ref, () => ({
     focusNode: (nodeId: string) => {
-      // Also update app state so the selection syncs properly
+      // Update app state so the selection syncs properly
       if (graph) {
         const node = graph.nodes.find(n => n.id === nodeId);
         if (node) {
@@ -109,7 +111,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
           openCodePanel();
         }
       }
-      focusNode(nodeId);
+      // Delay camera animation so React state updates and filterGraphByDepth
+      // effect complete before moving the camera
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        focusNode(nodeId, true);
+      }));
     }
   }), [focusNode, graph, setSelectedNode, openCodePanel]);
 
@@ -160,7 +166,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
   // Focus on selected node
   const handleFocusSelected = useCallback(() => {
     if (appSelectedNode) {
-      focusNode(appSelectedNode.id);
+      focusNode(appSelectedNode.id, true);
     }
   }, [appSelectedNode, focusNode]);
 

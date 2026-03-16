@@ -1,13 +1,15 @@
 import { useState, useCallback, useRef, DragEvent } from 'react';
-import { Upload, FileArchive, Github, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X } from 'lucide-react';
-import { cloneRepository, parseGitHubUrl } from '../services/git-clone';
-import { connectToServer, type ConnectToServerResult } from '../services/server-connection';
+import { Upload, FileArchive, Github, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X, GitBranch } from 'lucide-react';
+import { cloneRepository, parseGitHubUrl, parseGenericGitUrl } from '../services/git-clone';
+import { connectToServer, cloneAnalyzeOnServer, type ConnectToServerResult } from '../services/server-connection';
 import { FileEntry } from '../services/zip';
 
 interface DropZoneProps {
   onFileSelect: (file: File) => void;
   onGitClone?: (files: FileEntry[]) => void;
   onServerConnect?: (result: ConnectToServerResult, serverUrl?: string) => void;
+  /** ZIP 上传到后端：当填写了代理地址时，上传 zip 到后端解压分析，完成后转为 server 模式 */
+  onZipUploadToServer?: (file: File, proxyUrl: string) => Promise<void>;
 }
 
 function formatBytes(bytes: number): string {
@@ -16,20 +18,36 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZoneProps) => {
+export const DropZone = ({ onFileSelect, onGitClone, onServerConnect, onZipUploadToServer }: DropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
-  const [activeTab, setActiveTab] = useState<'zip' | 'github' | 'server'>('zip');
+  const [activeTab, setActiveTab] = useState<'zip' | 'github' | 'localgit' | 'server'>(() => {
+    if (typeof window === 'undefined') return 'zip';
+    const p = new URLSearchParams(window.location.search);
+    return p.has('server') ? 'server' : 'zip';
+  });
   const [githubUrl, setGithubUrl] = useState('');
   const [githubToken, setGithubToken] = useState('');
+  const [localGitUrl, setLocalGitUrl] = useState(() => localStorage.getItem('gitnexus-localgit-url') || '');
+  const [localGitToken, setLocalGitToken] = useState('');
+  const [localGitBranch, setLocalGitBranch] = useState(() => localStorage.getItem('gitnexus-localgit-branch') || '');
+  const [localGitProxyUrl, setLocalGitProxyUrl] = useState(() => localStorage.getItem('gitnexus-localgit-proxy-url') || '');
+  const [zipProxyUrl, setZipProxyUrl] = useState(() => localStorage.getItem('gitnexus-zip-proxy-url') || '');
+  const [isZipUploading, setIsZipUploading] = useState(false);
   const [showToken, setShowToken] = useState(false);
+  const [showLocalToken, setShowLocalToken] = useState(false);
   const [isCloning, setIsCloning] = useState(false);
   const [cloneProgress, setCloneProgress] = useState({ phase: '', percent: 0 });
   const [error, setError] = useState<string | null>(null);
 
-  // Server tab state
-  const [serverUrl, setServerUrl] = useState(() =>
-    localStorage.getItem('gitnexus-server-url') || ''
-  );
+  // Server tab state：优先从 URL 参数 server/repo 取默认值（默认 server 访问模式）
+  const [serverUrl, setServerUrl] = useState(() => {
+    const p = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    return p.get('server') || localStorage.getItem('gitnexus-server-url') || '';
+  });
+  const [serverRepoName, setServerRepoName] = useState(() => {
+    const p = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    return p.get('repo') || localStorage.getItem('gitnexus-server-repo') || '';
+  });
   const [isConnecting, setIsConnecting] = useState(false);
   const [serverProgress, setServerProgress] = useState<{
     phase: string;
@@ -50,33 +68,65 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      const file = files[0];
-      if (file.name.endsWith('.zip')) {
-        onFileSelect(file);
+  const handleZipFile = useCallback(
+    async (file: File) => {
+      const proxyTrimmed = zipProxyUrl.trim();
+      if (proxyTrimmed && onZipUploadToServer) {
+        setIsZipUploading(true);
+        setError(null);
+        const aborter = new AbortController();
+        abortControllerRef.current = aborter;
+        try {
+          await onZipUploadToServer(file, proxyTrimmed);
+          localStorage.setItem('gitnexus-zip-proxy-url', proxyTrimmed);
+        } catch (err) {
+          if ((err as Error).name === 'AbortError') return;
+          console.error('ZIP upload to server failed:', err);
+          setError((err as Error).message || 'ZIP 上传或分析失败');
+        } finally {
+          setIsZipUploading(false);
+          abortControllerRef.current = null;
+        }
       } else {
-        setError('Please drop a .zip file');
-      }
-    }
-  }, [onFileSelect]);
-
-  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      const file = files[0];
-      if (file.name.endsWith('.zip')) {
         onFileSelect(file);
-      } else {
-        setError('Please select a .zip file');
       }
-    }
-  }, [onFileSelect]);
+    },
+    [zipProxyUrl, onZipUploadToServer, onFileSelect]
+  );
+
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        const file = files[0];
+        if (file.name.endsWith('.zip')) {
+          handleZipFile(file);
+        } else {
+          setError('Please drop a .zip file');
+        }
+      }
+    },
+    [handleZipFile]
+  );
+
+  const handleFileInput = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (files && files.length > 0) {
+        const file = files[0];
+        if (file.name.endsWith('.zip')) {
+          handleZipFile(file);
+        } else {
+          setError('Please select a .zip file');
+        }
+      }
+    },
+    [handleZipFile]
+  );
 
   const handleGitClone = async () => {
     if (!githubUrl.trim()) {
@@ -125,6 +175,93 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
     }
   };
 
+  const handleLocalGitClone = async () => {
+    if (!localGitUrl.trim()) {
+      setError('请输入 Git 仓库 URL');
+      return;
+    }
+    const proxyTrimmed = localGitProxyUrl.trim();
+    if (!proxyTrimmed) {
+      setError('请填写代理/服务地址（即运行 gitnexus serve 的地址），以便在后端执行 clone-analyze');
+      return;
+    }
+
+    if (!parseGenericGitUrl(localGitUrl)) {
+      setError('无效的 Git URL，请使用 HTTPS 格式，例如：https://git.example.com/org/repo.git');
+      return;
+    }
+
+    setError(null);
+    setIsCloning(true);
+    setCloneProgress({ phase: 'starting', percent: 0 });
+
+    const aborter = new AbortController();
+    abortControllerRef.current = aborter;
+
+    try {
+      // 走后端 clone-analyze：代码落在 serve 机器的 ginexus_code 目录
+      await cloneAnalyzeOnServer(
+        proxyTrimmed,
+        localGitUrl,
+        localGitToken.trim() || undefined,
+        (phase, percent) => setCloneProgress({ phase, percent }),
+        aborter.signal,
+        localGitBranch.trim() || undefined
+      );
+
+      setLocalGitToken('');
+      localStorage.setItem('gitnexus-localgit-url', localGitUrl.trim());
+      localStorage.setItem('gitnexus-localgit-proxy-url', proxyTrimmed);
+      localStorage.setItem('gitnexus-localgit-branch', localGitBranch.trim());
+
+      // 从 Git URL 解析仓库名，用于后续从该服务拉图
+      // 若指定了分支，需与后端保持一致：目录名 = repoName + '_' + branch（特殊字符替换为 _）
+      let repoName: string | undefined;
+      try {
+        const u = new URL(localGitUrl);
+        const segs = u.pathname.split('/').filter(Boolean);
+        const baseName = segs.length ? segs[segs.length - 1].replace(/\.git$/i, '') : undefined;
+        const branchTrimmed = localGitBranch.trim();
+        if (baseName && branchTrimmed) {
+          const branchSuffix = branchTrimmed.replace(/[^a-zA-Z0-9_\-]/g, '_');
+          repoName = `${baseName}_${branchSuffix}`;
+        } else {
+          repoName = baseName;
+        }
+      } catch {
+        repoName = undefined;
+      }
+
+      setCloneProgress({ phase: 'connecting', percent: 95 });
+      const result = await connectToServer(
+        proxyTrimmed,
+        (phase, downloaded, total) => setCloneProgress({ phase, percent: 95 + (downloaded / (total || 1)) * 5 }),
+        aborter.signal,
+        repoName
+      );
+      if (onServerConnect) {
+        onServerConnect(result, proxyTrimmed);
+      }
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      console.error('Clone-analyze failed:', err);
+      const message = err instanceof Error ? err.message : '克隆或分析失败';
+      if (message.includes('401') || message.includes('403') || message.includes('Authentication')) {
+        if (!localGitToken) {
+          setError('该仓库需要鉴权，请填写访问令牌（Token）');
+        } else {
+          setError('鉴权失败，请检查令牌是否有效且具有仓库访问权限');
+        }
+      } else if (message.includes('404') || message.includes('not found')) {
+        setError('仓库不存在或无权访问，请检查 URL 或填写正确令牌');
+      } else {
+        setError(message);
+      }
+    } finally {
+      setIsCloning(false);
+    }
+  };
+
   const handleServerConnect = async () => {
     const urlToUse = serverUrl.trim() || window.location.origin;
     if (!urlToUse) {
@@ -142,15 +279,20 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    const repoToUse = serverRepoName.trim() || undefined;
     try {
       const result = await connectToServer(
         urlToUse,
         (phase, downloaded, total) => {
           setServerProgress({ phase, downloaded, total });
         },
-        abortController.signal
+        abortController.signal,
+        repoToUse
       );
 
+      if (repoToUse) {
+        localStorage.setItem('gitnexus-server-repo', repoToUse);
+      }
       if (onServerConnect) {
         onServerConnect(result, urlToUse);
       }
@@ -218,7 +360,21 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
             `}
           >
             <Github className="w-4 h-4" />
-            GitHub URL
+            GitHub
+          </button>
+          <button
+            onClick={() => { setActiveTab('localgit'); setError(null); }}
+            className={`
+              flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg
+              text-sm font-medium transition-all duration-200
+              ${activeTab === 'localgit'
+                ? 'bg-accent text-white shadow-md'
+                : 'text-text-secondary hover:text-text-primary hover:bg-elevated'
+              }
+            `}
+          >
+            <GitBranch className="w-4 h-4" />
+            Local Git
           </button>
           <button
             onClick={() => { setActiveTab('server'); setError(null); }}
@@ -246,6 +402,27 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
         {/* ZIP Upload Tab */}
         {activeTab === 'zip' && (
           <>
+            {/* 后端代理地址（可选）：填写后上传到后端解压分析，代码落在服务端 */}
+            {onZipUploadToServer && (
+              <div className="mb-4">
+                <input
+                  type="url"
+                  name="zip-proxy-input"
+                  value={zipProxyUrl}
+                  onChange={(e) => setZipProxyUrl(e.target.value)}
+                  placeholder="后端代理地址（可选）如 http://10.128.128.88:6660，填写后上传到后端解压分析"
+                  disabled={isZipUploading}
+                  className="
+                    w-full px-4 py-2.5
+                    bg-elevated border border-border-default rounded-xl
+                    text-text-primary placeholder-text-muted text-sm
+                    focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
+                    disabled:opacity-50 disabled:cursor-not-allowed
+                    transition-all duration-200
+                  "
+                />
+              </div>
+            )}
             <div
               className={`
                 relative p-16
@@ -255,11 +432,12 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
                   ? 'border-accent bg-elevated scale-105 shadow-glow'
                   : 'border-border-default hover:border-accent/50 hover:bg-elevated/50 animate-breathe'
                 }
+                ${isZipUploading ? 'pointer-events-none opacity-70' : ''}
               `}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
-              onClick={() => document.getElementById('file-input')?.click()}
+              onClick={() => !isZipUploading && document.getElementById('file-input')?.click()}
             >
               <input
                 id="file-input"
@@ -280,6 +458,8 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
               `}>
                 {isDragging ? (
                   <Upload className="w-10 h-10 text-white" />
+                ) : isZipUploading ? (
+                  <Loader2 className="w-10 h-10 text-white animate-spin" />
                 ) : (
                   <FileArchive className="w-10 h-10 text-white" />
                 )}
@@ -287,10 +467,12 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
 
               {/* Text */}
               <h2 className="text-xl font-semibold text-text-primary text-center mb-2">
-                {isDragging ? 'Drop it here!' : 'Drop your codebase'}
+                {isDragging ? 'Drop it here!' : isZipUploading ? '上传并分析中…' : 'Drop your codebase'}
               </h2>
               <p className="text-sm text-text-secondary text-center mb-6">
-                Drag & drop a .zip file to generate a knowledge graph
+                {zipProxyUrl.trim()
+                  ? '填写了代理地址：将上传到后端解压分析，代码落在服务端'
+                  : 'Drag & drop a .zip file to generate a knowledge graph'}
               </p>
 
               {/* Hints */}
@@ -298,9 +480,18 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
                 <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
                   .zip
                 </span>
+                {zipProxyUrl.trim() && (
+                  <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
+                    后端处理
+                  </span>
+                )}
               </div>
             </div>
-
+            {isZipUploading && (
+              <div className="mt-4 flex justify-center">
+                <Loader2 className="w-5 h-5 animate-spin text-accent" />
+              </div>
+            )}
           </>
         )}
 
@@ -440,6 +631,173 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
           </div>
         )}
 
+        {/* Local Git URL Tab */}
+        {activeTab === 'localgit' && (
+          <div className="p-8 bg-surface border border-border-default rounded-3xl">
+            <div className="mx-auto w-20 h-20 mb-6 flex items-center justify-center bg-gradient-to-br from-emerald-600 to-accent rounded-2xl shadow-lg">
+              <GitBranch className="w-10 h-10 text-white" />
+            </div>
+            <h2 className="text-xl font-semibold text-text-primary text-center mb-2">
+              本地 / 私有 Git 仓库
+            </h2>
+            <p className="text-sm text-text-secondary text-center mb-6">
+              填写服务地址（gitnexus serve）与 Git 仓库 URL、令牌；由服务端执行 clone-analyze，代码落在服务端 ginexus_code 目录。
+            </p>
+
+            <div className="space-y-3" data-form-type="other">
+              <input
+                type="url"
+                name="local-git-proxy-input"
+                value={localGitProxyUrl}
+                onChange={(e) => setLocalGitProxyUrl(e.target.value)}
+                placeholder="代理地址（可选，私有/内网必填）如 http://10.128.128.88:6660 或 gitnexus serve 地址"
+                disabled={isCloning}
+                autoComplete="off"
+                data-form-type="other"
+                className="
+                  w-full px-4 py-3
+                  bg-elevated border border-border-default rounded-xl
+                  text-text-primary placeholder-text-muted
+                  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  transition-all duration-200
+                "
+              />
+              <input
+                type="url"
+                name="local-git-url-input"
+                value={localGitUrl}
+                onChange={(e) => setLocalGitUrl(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && !isCloning && handleLocalGitClone()}
+                placeholder="Git 仓库 URL，如 https://git.example.com/org/repo.git"
+                disabled={isCloning}
+                autoComplete="off"
+                data-lpignore="true"
+                data-form-type="other"
+                className="
+                  w-full px-4 py-3
+                  bg-elevated border border-border-default rounded-xl
+                  text-text-primary placeholder-text-muted
+                  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  transition-all duration-200
+                "
+              />
+
+              <div className="relative">
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted">
+                  <GitBranch className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  name="local-git-branch-input"
+                  value={localGitBranch}
+                  onChange={(e) => setLocalGitBranch(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !isCloning && handleLocalGitClone()}
+                  placeholder="分支名（可选，不填则使用默认分支）"
+                  disabled={isCloning}
+                  autoComplete="off"
+                  data-lpignore="true"
+                  data-form-type="other"
+                  className="
+                    w-full pl-10 pr-4 py-3
+                    bg-elevated border border-border-default rounded-xl
+                    text-text-primary placeholder-text-muted
+                    focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
+                    disabled:opacity-50 disabled:cursor-not-allowed
+                    transition-all duration-200
+                  "
+                />
+              </div>
+
+              <div className="relative">
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted">
+                  <Key className="w-4 h-4" />
+                </div>
+                <input
+                  type={showLocalToken ? 'text' : 'password'}
+                  name="local-git-token-input"
+                  value={localGitToken}
+                  onChange={(e) => setLocalGitToken(e.target.value)}
+                  placeholder="访问令牌（必填，研发云仓库->应用菜单申请，经代理转发）"
+                  disabled={isCloning}
+                  autoComplete="new-password"
+                  data-lpignore="true"
+                  data-form-type="other"
+                  className="
+                    w-full pl-10 pr-10 py-3
+                    bg-elevated border border-border-default rounded-xl
+                    text-text-primary placeholder-text-muted
+                    focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
+                    disabled:opacity-50 disabled:cursor-not-allowed
+                    transition-all duration-200
+                  "
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLocalToken(!showLocalToken)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary transition-colors"
+                >
+                  {showLocalToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+
+              <button
+                onClick={handleLocalGitClone}
+                disabled={isCloning || !localGitUrl.trim() || !localGitProxyUrl.trim()}
+                className="
+                  w-full flex items-center justify-center gap-2
+                  px-4 py-3
+                  bg-accent hover:bg-accent/90
+                  text-white font-medium rounded-xl
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  transition-all duration-200
+                "
+              >
+                {isCloning ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    {cloneProgress.phase === 'already_exists'
+                      ? '仓库已存在，正在连接…'
+                      : `克隆并分析中 ${cloneProgress.percent}%`}
+                  </>
+                ) : (
+                  <>
+                    克隆并分析（代码落在服务端）
+                    <ArrowRight className="w-5 h-5" />
+                  </>
+                )}
+              </button>
+            </div>
+
+            {isCloning && (
+              <div className="mt-4">
+                <div className="h-2 bg-elevated rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-accent transition-all duration-300 ease-out"
+                    style={{ width: `${cloneProgress.percent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {localGitToken && (
+              <p className="mt-3 text-xs text-text-muted text-center">
+                令牌仅保存在当前页面，不会上传到任何服务器
+              </p>
+            )}
+
+            <div className="mt-4 flex items-center justify-center gap-3 text-xs text-text-muted">
+              <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
+                HTTPS
+              </span>
+              <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
+                支持鉴权
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Server Tab */}
         {activeTab === 'server' && (
           <div className="p-8 bg-surface border border-border-default rounded-3xl">
@@ -464,7 +822,29 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !isConnecting && handleServerConnect()}
-                placeholder={window.location.origin}
+                placeholder={typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:6660` : 'http://localhost:6660'}
+                disabled={isConnecting}
+                autoComplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
+                className="
+                  w-full px-4 py-3
+                  bg-elevated border border-border-default rounded-xl
+                  text-text-primary placeholder-text-muted
+                  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  transition-all duration-200
+                "
+              />
+
+              <input
+                type="text"
+                name="server-repo-input"
+                value={serverRepoName}
+                onChange={(e) => setServerRepoName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && !isConnecting && handleServerConnect()}
+                placeholder="仓库名称（可选，多仓库时指定）"
                 disabled={isConnecting}
                 autoComplete="off"
                 data-lpignore="true"
@@ -563,6 +943,29 @@ export const DropZone = ({ onFileSelect, onGitClone, onServerConnect }: DropZone
               <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
                 No WASM needed
               </span>
+            </div>
+
+            {/* 本地/私有 Git 接入说明 */}
+            <div className="mt-6 p-4 bg-elevated/60 border border-border-subtle rounded-xl text-sm text-text-secondary">
+              <p className="font-medium text-text-primary mb-1">添加本地或私有仓库</p>
+              <p className="mb-2">
+                在运行 GitNexus 的机器上，对已克隆的本地/私有仓库执行：
+              </p>
+              <code className="block px-3 py-2 bg-surface rounded-lg text-accent font-mono text-xs break-all">
+                gitnexus add /path/to/your/repo
+              </code>
+              <p className="mt-2 text-xs text-text-muted">
+                或使用 <code className="px-1 py-0.5 bg-surface rounded">gitnexus analyze /path/to/repo</code>。完成后刷新上方连接或重新选择仓库即可在列表中看到新仓库。
+              </p>
+              <p className="mt-3 text-xs text-text-muted border-t border-border-subtle pt-3">
+                <span className="font-medium text-text-secondary">需鉴权（令牌）时：</span>请先在服务器上使用令牌克隆仓库，再对克隆目录执行上述命令。例如：
+              </p>
+              <code className="block mt-1 px-3 py-2 bg-surface rounded-lg text-accent font-mono text-xs break-all">
+                git clone https://&lt;您的令牌&gt;@git.example.com/org/repo.git /path/to/repo
+              </code>
+              <p className="mt-1 text-xs text-text-muted">
+                或将令牌配置到 Git 凭据（如 <code className="px-1 py-0.5 bg-surface rounded">git config credential.helper</code>）后执行 <code className="px-1 py-0.5 bg-surface rounded">git clone</code>，再运行 <code className="px-1 py-0.5 bg-surface rounded">gitnexus add /path/to/repo</code>。
+              </p>
             </div>
           </div>
         )}

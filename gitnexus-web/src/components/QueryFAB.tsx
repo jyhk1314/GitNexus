@@ -4,24 +4,56 @@ import { useAppState } from '../hooks/useAppState';
 
 const EXAMPLE_QUERIES = [
   {
-    label: 'All Functions',
+    label: '所有函数',
     query: `MATCH (n:Function) RETURN n.id AS id, n.name AS name, n.filePath AS path LIMIT 50`,
   },
   {
-    label: 'All Classes',
+    label: '所有类',
     query: `MATCH (n:Class) RETURN n.id AS id, n.name AS name, n.filePath AS path LIMIT 50`,
   },
   {
-    label: 'All Interfaces',
+    label: '所有接口',
     query: `MATCH (n:Interface) RETURN n.id AS id, n.name AS name, n.filePath AS path LIMIT 50`,
   },
   {
-    label: 'Function Calls',
+    label: '函数调用',
     query: `MATCH (a:File)-[r:CodeRelation {type: 'CALLS'}]->(b:Function) RETURN a.id AS id, a.name AS caller, b.name AS callee LIMIT 50`,
   },
   {
-    label: 'Import Dependencies',
+    label: '导入依赖',
     query: `MATCH (a:File)-[r:CodeRelation {type: 'IMPORTS'}]->(b:File) RETURN a.id AS id, a.name AS from, b.name AS imports LIMIT 50`,
+  },
+  {
+    label: '项目目录/文件/类',
+    query: `MATCH (n:\`Folder\`) RETURN n.id AS id, n.name AS name, n.filePath AS path`,
+  },
+  {
+    label: '按目录展示源文件',
+    query: `MATCH (f:File) WHERE f.filePath STARTS WITH 'WebMonitor/' RETURN f.name`,
+  },
+  {
+    label: '按文件展示类/函数/方法/结构体',
+    query: `MATCH (f:Function) WHERE f.filePath CONTAINS '文件名' RETURN f.name`,
+  },
+  {
+    label: '被哪些文件导入（给定文件名）',
+    query: `MATCH (s)-[r:CodeRelation {type: 'IMPORTS'}]->(t) WHERE t.name = '文件名' RETURN s.name`,
+  },
+  {
+    label: '导入了哪些文件（给定文件名）',
+    query: `MATCH (s)-[r:CodeRelation {type: 'IMPORTS'}]->(t) WHERE s.name = '文件名' RETURN t.name`,
+  },
+  {
+    label: '文件包含的宏（给定文件名）',
+    query: `MATCH (n) WHERE n.id STARTS WITH 'Macro:' AND n.filePath CONTAINS '文件名' RETURN n.name`,
+  },
+  {
+    label: '节点名称入方向关系（谁指向该节点名称）',
+    query: `MATCH (m)-[r]->(n) WHERE n.name = '节点名称' RETURN r.type AS relation, m.name AS source`,
+  },
+  {
+    label: '节点名称出方向关系（该节点名称指向谁）',
+    query: `MATCH (n)-[r]->(m) WHERE n.name = '节点名称' RETURN r.type AS relation, m.name AS target`,
   },
 ];
 
@@ -34,6 +66,8 @@ export const QueryFAB = () => {
   const [error, setError] = useState<string | null>(null);
   const [showExamples, setShowExamples] = useState(false);
   const [showResults, setShowResults] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 50;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -129,6 +163,7 @@ export const QueryFAB = () => {
 
       setQueryResult({ rows, nodeIds, executionTime });
       setHighlightedNodeIds(new Set(nodeIds));
+      setCurrentPage(1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Query execution failed');
       setQueryResult(null);
@@ -366,37 +401,62 @@ export const QueryFAB = () => {
             </div>
           </div>
 
-          {showResults && queryResult.rows.length > 0 && (
-            <div className="max-h-48 overflow-auto scrollbar-thin border-t border-border-subtle">
-              <table className="w-full text-xs">
-                <thead className="bg-surface sticky top-0">
-                  <tr>
-                    {Object.keys(queryResult.rows[0]).map((key) => (
-                      <th key={key} className="px-3 py-2 text-left text-text-muted font-medium border-b border-border-subtle">
-                        {key}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {queryResult.rows.slice(0, 50).map((row, i) => (
-                    <tr key={i} className="hover:bg-hover/50 transition-colors">
-                      {Object.values(row).map((val, j) => (
-                        <td key={j} className="px-3 py-1.5 text-text-secondary border-b border-border-subtle/50 font-mono truncate max-w-[200px]">
-                          {typeof val === 'object' ? JSON.stringify(val) : String(val ?? '')}
-                        </td>
+          {showResults && queryResult.rows.length > 0 && (() => {
+            const totalPages = Math.ceil(queryResult.rows.length / PAGE_SIZE);
+            const pagedRows = queryResult.rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+            return (
+              <div className="border-t border-border-subtle">
+                <div className="max-h-48 overflow-auto scrollbar-thin">
+                  <table className="w-full text-xs">
+                    <thead className="bg-surface sticky top-0">
+                      <tr>
+                        {Object.keys(queryResult.rows[0]).map((key) => (
+                          <th key={key} className="px-3 py-2 text-left text-text-muted font-medium border-b border-border-subtle">
+                            {key}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pagedRows.map((row, i) => (
+                        <tr key={i} className="hover:bg-hover/50 transition-colors">
+                          {Object.values(row).map((val, j) => (
+                            <td key={j} className="px-3 py-1.5 text-text-secondary border-b border-border-subtle/50 font-mono truncate max-w-[200px]">
+                              {typeof val === 'object' ? JSON.stringify(val) : String(val ?? '')}
+                            </td>
+                          ))}
+                        </tr>
                       ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {queryResult.rows.length > 50 && (
-                <div className="px-3 py-2 text-xs text-text-muted bg-surface border-t border-border-subtle">
-                  Showing 50 of {queryResult.rows.length} rows
+                    </tbody>
+                  </table>
                 </div>
-              )}
-            </div>
-          )}
+                {totalPages > 1 && (
+                  <div className="px-3 py-2 flex items-center justify-between text-xs bg-surface border-t border-border-subtle">
+                    <span className="text-text-muted">
+                      第 {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, queryResult.rows.length)} 行，共 {queryResult.rows.length} 行
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="px-2 py-0.5 rounded border border-border-subtle text-text-secondary hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        ‹
+                      </button>
+                      <span className="px-2 text-text-secondary">{currentPage} / {totalPages}</span>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="px-2 py-0.5 rounded border border-border-subtle text-text-secondary hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

@@ -12,7 +12,7 @@ import { CodeReferencesPanel } from './components/CodeReferencesPanel';
 import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
-import { connectToServer, fetchRepos, normalizeServerUrl, type ConnectToServerResult } from './services/server-connection';
+import { connectToServer, fetchRepos, normalizeServerUrl, uploadZipAnalyzeOnServer, type ConnectToServerResult } from './services/server-connection';
 
 const AppContent = () => {
   const {
@@ -30,13 +30,18 @@ const AppContent = () => {
     setSettingsPanelOpen,
     refreshLLMSettings,
     initializeAgent,
+    initializeBackendAgent,
     startEmbeddings,
+    setEmbeddingError,
     embeddingStatus,
     codeReferences,
     selectedNode,
     isCodePanelOpen,
     serverBaseUrl,
     setServerBaseUrl,
+    serverRepoName,
+    setServerRepoName,
+    projectName,
     availableRepos,
     setAvailableRepos,
     switchRepo,
@@ -65,15 +70,20 @@ const AppContent = () => {
         initializeAgent(projectName);
       }
 
-      // Auto-start embeddings pipeline in background
-      // Uses WebGPU if available, falls back to WASM
-      startEmbeddings().catch((err) => {
-        if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-          startEmbeddings('wasm').catch(console.warn);
-        } else {
-          console.warn('Embeddings auto-start failed:', err);
-        }
-      });
+      // Auto-start embeddings pipeline in background when KuzuDB loaded (required for vector search)
+      if (result.kuzuReady !== false) {
+        startEmbeddings().catch((err) => {
+          if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
+            startEmbeddings('wasm').catch(console.warn);
+          } else {
+            console.warn('Embeddings auto-start failed:', err);
+          }
+        });
+      } else {
+        setEmbeddingError(
+          '向量检索不可用：内存数据库加载失败（常见原因：跨域或未开启 SharedArrayBuffer）。关键词检索与图谱仍可用。'
+        );
+      }
     } catch (error) {
       console.error('Pipeline error:', error);
       setProgress({
@@ -87,7 +97,7 @@ const AppContent = () => {
         setProgress(null);
       }, 3000);
     }
-  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipeline, startEmbeddings, initializeAgent]);
+  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipeline, startEmbeddings, setEmbeddingError, initializeAgent]);
 
   const handleGitClone = useCallback(async (files: FileEntry[]) => {
     const firstPath = files[0]?.path || 'repository';
@@ -110,13 +120,19 @@ const AppContent = () => {
         initializeAgent(projectName);
       }
 
-      startEmbeddings().catch((err) => {
-        if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-          startEmbeddings('wasm').catch(console.warn);
-        } else {
-          console.warn('Embeddings auto-start failed:', err);
-        }
-      });
+      if (result.kuzuReady !== false) {
+        startEmbeddings().catch((err) => {
+          if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
+            startEmbeddings('wasm').catch(console.warn);
+          } else {
+            console.warn('Embeddings auto-start failed:', err);
+          }
+        });
+      } else {
+        setEmbeddingError(
+          '向量检索不可用：内存数据库加载失败（常见原因：跨域或未开启 SharedArrayBuffer）。关键词检索与图谱仍可用。'
+        );
+      }
     } catch (error) {
       console.error('Pipeline error:', error);
       setProgress({
@@ -130,13 +146,21 @@ const AppContent = () => {
         setProgress(null);
       }, 3000);
     }
-  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddings, initializeAgent]);
+  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddings, setEmbeddingError, initializeAgent]);
 
-  const handleServerConnect = useCallback((result: ConnectToServerResult) => {
+  const handleServerConnect = useCallback((
+    result: ConnectToServerResult,
+    baseUrl?: string,
+    repoName?: string,
+  ) => {
     // Extract project name from repoPath
     const repoPath = result.repoInfo.repoPath;
-    const projectName = repoPath.split('/').pop() || 'server-project';
+    const projectName = result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
     setProjectName(projectName);
+
+    // Store repo name for server mode queries
+    const effectiveRepoName = repoName || result.repoInfo.name || projectName;
+    setServerRepoName(effectiveRepoName);
 
     // Build KnowledgeGraph from server data (bypasses WASM pipeline entirely)
     const graph = createKnowledgeGraph();
@@ -158,8 +182,12 @@ const AppContent = () => {
     // Transition directly to exploring view
     setViewMode('exploring');
 
-    // Initialize agent if LLM is configured
-    if (getActiveProviderConfig()) {
+    // Initialize backend agent if LLM is configured
+    // Pass fileMap directly to avoid stale closure (setFileContents is async)
+    if (getActiveProviderConfig() && baseUrl) {
+      initializeBackendAgent(baseUrl, effectiveRepoName, projectName, fileMap);
+    } else if (getActiveProviderConfig()) {
+      // Fallback: try local agent (will fail gracefully if KuzuDB not loaded)
       initializeAgent(projectName);
     }
 
@@ -171,9 +199,109 @@ const AppContent = () => {
         console.warn('Embeddings auto-start failed:', err);
       }
     });
-  }, [setViewMode, setGraph, setFileContents, setProjectName, initializeAgent, startEmbeddings]);
+  }, [setViewMode, setGraph, setFileContents, setProjectName, setServerRepoName, initializeAgent, initializeBackendAgent, startEmbeddings]);
 
-  // Auto-connect when ?server query param is present (bookmarkable shortcut)
+  const handleZipUploadToServer = useCallback(
+    async (file: File, proxyUrl: string) => {
+      const baseName = file.name.replace(/\.zip$/i, '');
+      const repoName = `${baseName}_zip`;
+      setProjectName(repoName);
+      setProgress({ phase: 'extracting', percent: 0, message: 'Checking server...', detail: 'Validating' });
+      setViewMode('loading');
+
+      const baseUrl = normalizeServerUrl(proxyUrl);
+      const aborter = new AbortController();
+
+      try {
+        // 持久化：通过压缩包名称判断是否已上传，已上传则直接走 server 模式
+        const repos = await fetchRepos(baseUrl);
+        const repoExists = repos.some((r) => r.name === repoName);
+        if (repoExists) {
+          setProgress({ phase: 'extracting', percent: 10, message: '已上传过，正在连接...', detail: repoName });
+          const result = await connectToServer(
+            proxyUrl,
+            (phase, downloaded, total) => {
+              if (phase === 'validating') {
+                setProgress({ phase: 'extracting', percent: 15, message: 'Connecting...', detail: 'Validating' });
+              } else if (phase === 'downloading') {
+                const pct = total ? Math.round((downloaded / total) * 90) + 15 : 50;
+                setProgress({ phase: 'extracting', percent: pct, message: 'Downloading graph...', detail: `${(downloaded / (1024 * 1024)).toFixed(1)} MB` });
+              } else if (phase === 'extracting') {
+                setProgress({ phase: 'extracting', percent: 97, message: 'Processing...', detail: 'Extracting' });
+              }
+            },
+            aborter.signal,
+            repoName
+          );
+          setServerBaseUrl(baseUrl);
+          setServerRepoName(repoName);
+          handleServerConnect(result, baseUrl, repoName);
+          try {
+            const allRepos = await fetchRepos(baseUrl);
+            setAvailableRepos(allRepos);
+          } catch (e) {
+            console.warn('Failed to fetch repo list:', e);
+          }
+          return;
+        }
+
+        setProgress({ phase: 'extracting', percent: 5, message: 'Uploading ZIP...', detail: file.name });
+        await uploadZipAnalyzeOnServer(
+          proxyUrl,
+          file,
+          (phase, percent) => {
+            const msg = phase === 'already_exists' ? '已存在，正在连接...' : phase === 'extract_done' ? '解压完成，分析中...' : phase;
+            setProgress({ phase: 'extracting', percent: 5 + percent * 0.9, message: msg, detail: `${percent}%` });
+          },
+          aborter.signal
+        );
+
+        setProgress({ phase: 'extracting', percent: 95, message: 'Connecting...', detail: 'Fetching graph' });
+        const result = await connectToServer(
+          proxyUrl,
+          (phase, downloaded, total) => {
+            if (phase === 'validating') {
+              setProgress({ phase: 'extracting', percent: 95, message: 'Connecting...', detail: 'Validating' });
+            } else if (phase === 'downloading') {
+              const pct = total ? 95 + (downloaded / total) * 5 : 97;
+              setProgress({ phase: 'extracting', percent: pct, message: 'Downloading graph...', detail: `${(downloaded / (1024 * 1024)).toFixed(1)} MB` });
+            } else if (phase === 'extracting') {
+              setProgress({ phase: 'extracting', percent: 99, message: 'Processing...', detail: 'Extracting' });
+            }
+          },
+          aborter.signal,
+          repoName
+        );
+
+        setServerBaseUrl(baseUrl);
+        setServerRepoName(repoName);
+        handleServerConnect(result, baseUrl, repoName);
+
+        try {
+          const allRepos = await fetchRepos(baseUrl);
+          setAvailableRepos(allRepos);
+        } catch (e) {
+          console.warn('Failed to fetch repo list:', e);
+        }
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
+        console.error('ZIP upload to server failed:', error);
+        setProgress({
+          phase: 'error',
+          percent: 0,
+          message: 'ZIP 上传或分析失败',
+          detail: error instanceof Error ? error.message : 'Unknown error',
+        });
+        setTimeout(() => {
+          setViewMode('onboarding');
+          setProgress(null);
+        }, 3000);
+      }
+    },
+    [handleServerConnect, setViewMode, setProgress, setProjectName, setServerBaseUrl, setServerRepoName, setAvailableRepos]
+  );
+
+  // 默认 server 访问模式：URL 参数 server（必填）、repo（可选）指定服务地址与仓库，自动连接并保留参数便于刷新/书签
   const autoConnectRan = useRef(false);
   useEffect(() => {
     if (autoConnectRan.current) return;
@@ -181,14 +309,11 @@ const AppContent = () => {
     if (!params.has('server')) return;
     autoConnectRan.current = true;
 
-    // Clean the URL so a refresh won't re-trigger
-    const cleanUrl = window.location.pathname + window.location.hash;
-    window.history.replaceState(null, '', cleanUrl);
-
     setProgress({ phase: 'extracting', percent: 0, message: 'Connecting to server...', detail: 'Validating server' });
     setViewMode('loading');
 
     const serverUrl = params.get('server') || window.location.origin;
+    const repoParam = params.get('repo') || undefined;
 
     const baseUrl = normalizeServerUrl(serverUrl);
 
@@ -202,11 +327,12 @@ const AppContent = () => {
       } else if (phase === 'extracting') {
         setProgress({ phase: 'extracting', percent: 97, message: 'Processing...', detail: 'Extracting file contents' });
       }
-    }).then(async (result) => {
-      handleServerConnect(result);
-
-      // Store server URL and fetch available repos for the repo switcher
+    }, undefined, repoParam).then(async (result) => {
+      // Store server URL first so handleServerConnect can use it
       setServerBaseUrl(baseUrl);
+      handleServerConnect(result, baseUrl, repoParam);
+
+      // Fetch available repos for the repo switcher
       try {
         const repos = await fetchRepos(baseUrl);
         setAvailableRepos(repos);
@@ -236,8 +362,13 @@ const AppContent = () => {
   // NOTE: Must be defined BEFORE any conditional returns (React hooks rule)
   const handleSettingsSaved = useCallback(() => {
     refreshLLMSettings();
-    initializeAgent();
-  }, [refreshLLMSettings, initializeAgent]);
+    // server 模式下用 backend agent，本地模式用 local agent
+    if (serverBaseUrl && serverRepoName) {
+      initializeBackendAgent(serverBaseUrl, serverRepoName, projectName || serverRepoName);
+    } else {
+      initializeAgent(projectName || undefined);
+    }
+  }, [refreshLLMSettings, initializeAgent, initializeBackendAgent, serverBaseUrl, serverRepoName, projectName]);
 
   // Render based on view mode
   if (viewMode === 'onboarding') {
@@ -245,17 +376,20 @@ const AppContent = () => {
       <DropZone
         onFileSelect={handleFileSelect}
         onGitClone={handleGitClone}
+        onZipUploadToServer={handleZipUploadToServer}
         onServerConnect={async (result, serverUrl) => {
-          handleServerConnect(result);
           if (serverUrl) {
             const baseUrl = normalizeServerUrl(serverUrl);
             setServerBaseUrl(baseUrl);
+            handleServerConnect(result, baseUrl, result.repoInfo.name);
             try {
               const repos = await fetchRepos(baseUrl);
               setAvailableRepos(repos);
             } catch (e) {
               console.warn('Failed to fetch repo list:', e);
             }
+          } else {
+            handleServerConnect(result);
           }
         }}
       />

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send, Square, Sparkles, User,
-  PanelRightClose, Loader2, AlertTriangle, GitBranch
+  PanelRightClose, Loader2, AlertTriangle, GitBranch, X
 } from 'lucide-react';
 import { useAppState } from '../hooks/useAppState';
 import { ToolCallCard } from './ToolCallCard';
@@ -20,6 +20,7 @@ export const RightPanel = () => {
     isChatLoading,
     currentToolCalls,
     agentError,
+    clearAgentError,
     isAgentReady,
     isAgentInitializing,
     sendChatMessage,
@@ -38,6 +39,13 @@ export const RightPanel = () => {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatMessages, isChatLoading]);
+
+  // Auto-dismiss error after 6 seconds
+  useEffect(() => {
+    if (!agentError) return;
+    const timer = setTimeout(clearAgentError, 6000);
+    return () => clearTimeout(timer);
+  }, [agentError, clearAgentError]);
 
   const resolveFilePathForUI = useCallback((requestedPath: string): string | null => {
     const req = requestedPath.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
@@ -279,8 +287,15 @@ export const RightPanel = () => {
           {/* Status / errors */}
           {agentError && (
             <div className="px-4 py-3 bg-rose-500/10 border-b border-rose-500/30 text-rose-100 text-sm flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4" />
-              <span>{agentError}</span>
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <span className="flex-1 min-w-0">{agentError}</span>
+              <button
+                onClick={clearAgentError}
+                className="p-1 rounded hover:bg-rose-500/20 text-rose-200 hover:text-white transition-colors flex-shrink-0"
+                title="关闭"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           )}
 
@@ -430,12 +445,12 @@ export const RightPanel = () => {
                 </button>
               )}
             </div>
-            {!isAgentReady && !isAgentInitializing && (
+            {!isAgentReady && !isAgentInitializing && !agentError && (
               <div className="mt-2 text-xs text-amber-200 flex items-center gap-2">
                 <AlertTriangle className="w-3.5 h-3.5" />
                 <span>
                   {isProviderConfigured()
-                    ? 'Initializing AI agent...'
+                    ? 'AI agent not initialized. Save settings to connect.'
                     : 'Configure an LLM provider to enable chat.'}
                 </span>
               </div>

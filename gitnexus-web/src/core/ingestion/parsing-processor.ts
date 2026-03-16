@@ -9,6 +9,71 @@ import { getLanguageFromFilename } from './utils';
 export type FileProgressCallback = (current: number, total: number, filePath: string) => void;
 
 // ============================================================================
+// C++ CLASS/STRUCT NAME - Skip export macros (e.g. class DLL_API MyClass)
+// ============================================================================
+
+/** Known C/C++ export/import macros that may appear between class-key and class name */
+const CPP_EXPORT_MACRO_NAMES = new Set([
+  'DLL_API', 'API', 'WINAPI', 'APIENTRY', 'CALLBACK', 'STDCALL', 'CDECL',
+  'EXPORT_API', 'IMPORT_API', 'DLLEXPORT', 'DLLIMPORT', '__declspec',
+]);
+
+/**
+ * Collect all descendants of node with type `typeName` (depth-first, document order).
+ */
+function collectDescendantsByType(node: any, typeName: string, out: any[]): void {
+  if (!node) return;
+  if (node.type === typeName) out.push(node);
+  const n = node.childCount ?? 0;
+  for (let i = 0; i < n; i++) {
+    const c = node.child(i);
+    if (c) collectDescendantsByType(c, typeName, out);
+  }
+}
+
+function findFirstDescendant(node: any, typeName: string): any {
+  if (!node) return null;
+  if (node.type === typeName) return node;
+  const n = node.childCount ?? 0;
+  for (let i = 0; i < n; i++) {
+    const c = node.child(i);
+    const found = c ? findFirstDescendant(c, typeName) : null;
+    if (found) return found;
+  }
+  return null;
+}
+
+/** C++: 有 class/struct 体（{ ... }）才是定义，否则是前向声明 class Foo; */
+function hasClassOrStructBody(specifierNode: any): boolean {
+  if (!specifierNode) return false;
+  const body: any[] = [];
+  collectDescendantsByType(specifierNode, 'field_declaration_list', body);
+  return body.length > 0;
+}
+
+/**
+ * When the captured "name" for a C++ class/struct is an export macro (e.g. DLL_API),
+ * return the real type name (e.g. the type_identifier immediately before the body).
+ * Otherwise returns the original captured name.
+ * Exported for use in heritage-processor.
+ */
+export function getRealCppClassOrStructName(specifierNode: any, capturedName: string): string {
+  if (!specifierNode || !CPP_EXPORT_MACRO_NAMES.has(capturedName)) return capturedName;
+  const typeIds: any[] = [];
+  collectDescendantsByType(specifierNode, 'type_identifier', typeIds);
+  if (typeIds.length === 0) return capturedName;
+  // Order by start position (row, then column) and take the last — that's the class name
+  typeIds.sort((a, b) => {
+    const pa = a.startPosition ?? { row: 0, column: 0 };
+    const pb = b.startPosition ?? { row: 0, column: 0 };
+    if (pa.row !== pb.row) return pa.row - pb.row;
+    return pa.column - pb.column;
+  });
+  const last = typeIds[typeIds.length - 1];
+  return last.text ?? capturedName;
+}
+
+// ============================================================================
 // EXPORT DETECTION - Language-specific visibility detection
 // ============================================================================
 
@@ -179,7 +244,12 @@ export const processParsing = async (
       const nameNode = captureMap['name'];
       if (!nameNode) return;
 
-      const nodeName = nameNode.text;
+      let nodeName = nameNode.text;
+      // C++: class/struct 前若有导出宏（如 class DLL_API MyClass），name 会被误识别为宏名，取最后一个 type_identifier 作为真实类名
+      if (language === 'cpp') {
+        let specifier = captureMap['definition.class'] ?? captureMap['definition.struct'];
+        if (specifier) nodeName = getRealCppClassOrStructName(specifier, nodeName);
+      }
       
       let nodeLabel = 'CodeElement';
       
@@ -214,6 +284,16 @@ export const processParsing = async (
       else if (captureMap['definition.constructor']) nodeLabel = 'Constructor';
       // C++ template
       else if (captureMap['definition.template']) nodeLabel = 'Template';
+
+      // C++: 仅保留带 { } 体的类/结构体定义，过滤前向声明（class MyClass;）
+      if (language === 'cpp' && (nodeLabel === 'Class' || nodeLabel === 'Struct' || nodeLabel === 'Template')) {
+        let spec = captureMap['definition.class'] ?? captureMap['definition.struct'];
+        if (!spec && captureMap['definition.template']) {
+          const t = captureMap['definition.template'];
+          spec = findFirstDescendant(t, 'class_specifier') ?? findFirstDescendant(t, 'struct_specifier');
+        }
+        if (spec && !hasClassOrStructBody(spec)) return;
+      }
 
       const nodeId = generateId(nodeLabel, `${file.path}:${nodeName}`);
       

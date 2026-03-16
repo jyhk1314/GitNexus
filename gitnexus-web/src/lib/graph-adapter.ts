@@ -280,7 +280,7 @@ export const knowledgeGraphToGraphology = (
   // Using varied hues so relationships are easily distinguishable
   const EDGE_STYLES: Record<string, { color: string; sizeMultiplier: number }> = {
     // STRUCTURAL - Greens (folder/file hierarchy)
-    CONTAINS: { color: '#2d5a3d', sizeMultiplier: 0.4 },    // Forest green - folder contains
+    CONTAINS: { color: '#fff108', sizeMultiplier: 0.4 },    // Forest green - folder contains
     
     // DEFINITIONS - Cyan/Teal (code definitions)
     DEFINES: { color: '#0e7490', sizeMultiplier: 0.5 },     // Cyan - file defines function/class

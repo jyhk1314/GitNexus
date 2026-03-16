@@ -33,6 +33,8 @@ export const initEmbedder = async (): Promise<FeatureExtractionPipeline> => {
   initPromise = (async () => {
     try {
       env.allowLocalModels = false;
+      // 国内镜像，避免 Hugging Face 直连慢或不可用
+      env.remoteHost = 'https://hf-mirror.com/';
       
       console.error('GitNexus: Loading embedding model (first search may take a moment)...');
 

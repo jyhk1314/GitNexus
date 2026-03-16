@@ -5,6 +5,8 @@ import {
   saveSettings,
   getProviderDisplayName,
   fetchOpenRouterModels,
+  fetchOpenAIModels,
+  fetchOllamaModels,
 } from '../core/llm/settings-service';
 import type { LLMSettings, LLMProvider } from '../core/llm/types';
 
@@ -18,17 +20,19 @@ interface SettingsPanelProps {
 }
 
 /**
- * Searchable combobox for OpenRouter model selection
+ * Searchable combobox for model selection (OpenAI, Ollama, OpenRouter)
  */
-interface OpenRouterModelComboboxProps {
+interface SearchableModelComboboxProps {
   value: string;
   onChange: (model: string) => void;
   models: Array<{ id: string; name: string }>;
   isLoading: boolean;
   onLoadModels: () => void;
+  placeholder?: string;
+  emptyHint?: string;
 }
 
-const OpenRouterModelCombobox = ({ value, onChange, models, isLoading, onLoadModels }: OpenRouterModelComboboxProps) => {
+const SearchableModelCombobox = ({ value, onChange, models, isLoading, onLoadModels, placeholder = 'Search or type model ID...', emptyHint = 'e.g. openai/gpt-4o' }: SearchableModelComboboxProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -122,7 +126,7 @@ const OpenRouterModelCombobox = ({ value, onChange, models, isLoading, onLoadMod
             value={searchTerm}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Search or type model ID..."
+            placeholder={placeholder}
             className="flex-1 bg-transparent text-text-primary placeholder:text-text-muted outline-none font-mono text-sm"
             onClick={e => e.stopPropagation()}
           />
@@ -151,7 +155,7 @@ const OpenRouterModelCombobox = ({ value, onChange, models, isLoading, onLoadMod
                 <div className="text-text-muted text-sm">
                   <Search className="w-5 h-5 mx-auto mb-2 opacity-50" />
                   <p>Type a model ID or press Enter</p>
-                  <p className="text-xs mt-1">e.g. openai/gpt-4o</p>
+                  <p className="text-xs mt-1">{emptyHint}</p>
                 </div>
               ) : (
                 <div className="text-text-muted text-sm">
@@ -222,6 +226,12 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
   // OpenRouter models state
   const [openRouterModels, setOpenRouterModels] = useState<Array<{ id: string; name: string }>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  // OpenAI models state
+  const [openAIModels, setOpenAIModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [isLoadingOpenAIModels, setIsLoadingOpenAIModels] = useState(false);
+  // Ollama models state
+  const [ollamaModels, setOllamaModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false);
 
   // Load settings when panel opens
   useEffect(() => {
@@ -249,6 +259,25 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
     setOpenRouterModels(models);
     setIsLoadingModels(false);
   }, []);
+
+  // Load OpenAI models (from baseUrl or default API)
+  const loadOpenAIModels = useCallback(async () => {
+    setIsLoadingOpenAIModels(true);
+    const models = await fetchOpenAIModels(
+      settings.openai?.apiKey ?? '',
+      settings.openai?.baseUrl
+    );
+    setOpenAIModels(models);
+    setIsLoadingOpenAIModels(false);
+  }, [settings.openai?.apiKey, settings.openai?.baseUrl]);
+
+  // Load Ollama models
+  const loadOllamaModels = useCallback(async () => {
+    setIsLoadingOllamaModels(true);
+    const models = await fetchOllamaModels(settings.ollama?.baseUrl ?? 'http://localhost:11434');
+    setOllamaModels(models);
+    setIsLoadingOllamaModels(false);
+  }, [settings.ollama?.baseUrl]);
 
   useEffect(() => {
     if (settings.activeProvider === 'ollama') {
@@ -334,7 +363,7 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
                   type="url"
                   value={backendUrl}
                   onChange={(e) => onBackendUrlChange(e.target.value)}
-                  placeholder="http://localhost:4747"
+                  placeholder="http://localhost:6660"
                   className="w-full px-4 py-3 bg-elevated border border-border-subtle rounded-xl text-text-primary placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none transition-all font-mono text-sm"
                 />
                 <p className="text-xs text-text-muted">
@@ -415,16 +444,29 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium text-text-secondary">Model</label>
-                <input
-                  type="text"
+                <label className="flex items-center gap-2 text-sm font-medium text-text-secondary">
+                  Model
+                  <button
+                    type="button"
+                    onClick={loadOpenAIModels}
+                    disabled={isLoadingOpenAIModels}
+                    className="p-1 text-text-muted hover:text-accent transition-colors disabled:opacity-50"
+                    title="Fetch models"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isLoadingOpenAIModels ? 'animate-spin' : ''}`} />
+                  </button>
+                </label>
+                <SearchableModelCombobox
                   value={settings.openai?.model ?? 'gpt-5.2-chat'}
-                  onChange={e => setSettings(prev => ({
+                  onChange={(model) => setSettings(prev => ({
                     ...prev,
-                    openai: { ...prev.openai!, model: e.target.value }
+                    openai: { ...prev.openai!, model }
                   }))}
-                  placeholder="e.g., gpt-4o, gpt-4-turbo, gpt-3.5-turbo"
-                  className="w-full px-4 py-3 bg-elevated border border-border-subtle rounded-xl text-text-primary placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none transition-all font-mono text-sm"
+                  models={openAIModels}
+                  isLoading={isLoadingOpenAIModels}
+                  onLoadModels={loadOpenAIModels}
+                  placeholder="Search or type model ID..."
+                  emptyHint="e.g. gpt-4o, deepseek-v3 (click refresh to fetch)"
                 />
               </div>
 
@@ -719,7 +761,18 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium text-text-secondary">Model</label>
+                <label className="flex items-center gap-2 text-sm font-medium text-text-secondary">
+                  Model
+                  <button
+                    type="button"
+                    onClick={loadOllamaModels}
+                    disabled={isLoadingOllamaModels}
+                    className="p-1 text-text-muted hover:text-accent transition-colors disabled:opacity-50"
+                    title="Fetch models"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isLoadingOllamaModels ? 'animate-spin' : ''}`} />
+                  </button>
+                </label>
 
                 {ollamaError && !isCheckingOllama && (
                   <div className="p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
@@ -730,15 +783,17 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
                   </div>
                 )}
 
-                <input
-                  type="text"
+                <SearchableModelCombobox
                   value={settings.ollama?.model ?? ''}
-                  onChange={e => setSettings(prev => ({
+                  onChange={(model) => setSettings(prev => ({
                     ...prev,
-                    ollama: { ...prev.ollama!, model: e.target.value }
+                    ollama: { ...prev.ollama!, model }
                   }))}
-                  placeholder="e.g., llama3.2, mistral, codellama"
-                  className="w-full px-4 py-3 bg-elevated border border-border-subtle rounded-xl text-text-primary placeholder:text-text-muted focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none transition-all font-mono text-sm"
+                  models={ollamaModels}
+                  isLoading={isLoadingOllamaModels}
+                  onLoadModels={loadOllamaModels}
+                  placeholder="Search or type model ID..."
+                  emptyHint="e.g. llama3.2, mistral (click refresh to fetch)"
                 />
                 <p className="text-xs text-text-muted">
                   Pull a model with <code className="px-1 py-0.5 bg-elevated rounded">ollama pull llama3.2</code>
@@ -788,8 +843,19 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium text-text-secondary">Model</label>
-                <OpenRouterModelCombobox
+                <label className="flex items-center gap-2 text-sm font-medium text-text-secondary">
+                  Model
+                  <button
+                    type="button"
+                    onClick={loadOpenRouterModels}
+                    disabled={isLoadingModels}
+                    className="p-1 text-text-muted hover:text-accent transition-colors disabled:opacity-50"
+                    title="Fetch models"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isLoadingModels ? 'animate-spin' : ''}`} />
+                  </button>
+                </label>
+                <SearchableModelCombobox
                   value={settings.openrouter?.model ?? ''}
                   onChange={(model) => setSettings(prev => ({
                     ...prev,
@@ -798,6 +864,7 @@ export const SettingsPanel = ({ isOpen, onClose, onSettingsSaved, backendUrl, is
                   models={openRouterModels}
                   isLoading={isLoadingModels}
                   onLoadModels={loadOpenRouterModels}
+                  emptyHint="e.g. openai/gpt-4o"
                 />
                 <p className="text-xs text-text-muted">
                   Browse all models at{' '}

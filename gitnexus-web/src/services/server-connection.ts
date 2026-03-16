@@ -57,6 +57,140 @@ export function normalizeServerUrl(input: string): string {
   return url;
 }
 
+/**
+ * 通过后端 clone-analyze 拉取并建索引，代码落在 serve 机器的 ginexus_code 目录。
+ * 要求 serverBaseUrl 为能访问到 gitnexus serve 的地址（如 http://10.128.128.88:6660）。
+ */
+export async function cloneAnalyzeOnServer(
+  serverBaseUrl: string,
+  gitUrl: string,
+  token: string | undefined,
+  onProgress: (phase: string, percent: number) => void,
+  signal?: AbortSignal,
+  branch?: string
+): Promise<void> {
+  const baseUrl = normalizeServerUrl(serverBaseUrl);
+  const url = `${baseUrl}/repos/clone-analyze`;
+  const body: Record<string, string> = { url: gitUrl };
+  if (token) body.token = token;
+  if (branch) body.branch = branch;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error((err as { error?: string }).error || `Server ${res.status}`);
+  }
+  const contentType = res.headers.get('Content-Type') || '';
+  if (contentType.includes('application/json')) {
+    const data = (await res.json()) as { ok?: boolean; alreadyExists?: boolean; error?: string };
+    if (data.alreadyExists && data.ok) {
+      onProgress('already_exists', 100);
+      return;
+    }
+    throw new Error(data.error || 'Request failed');
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const dataLine = line.match(/^data:\s*(.+)$/m)?.[1];
+      if (!dataLine) continue;
+      try {
+        const data = JSON.parse(dataLine) as { type: string; phase?: string; percent?: number; ok?: boolean; error?: string };
+        if (data.type === 'clone_done') {
+          onProgress('clone_done', 5);
+        } else if (data.type === 'progress' && data.phase != null) {
+          onProgress(data.phase, typeof data.percent === 'number' ? data.percent : 0);
+        } else if (data.type === 'done') {
+          if (!data.ok) throw new Error(data.error || 'clone-analyze failed');
+          return;
+        }
+      } catch (e) {
+        if (e instanceof SyntaxError) continue;
+        throw e;
+      }
+    }
+  }
+  throw new Error('clone-analyze stream ended without done');
+}
+
+/**
+ * 通过后端 zip-upload-analyze 上传 ZIP 并建索引，代码落在 serve 机器的 ginexus_code 目录。
+ * 要求 serverBaseUrl 为能访问到 gitnexus serve 的地址。
+ */
+export async function uploadZipAnalyzeOnServer(
+  serverBaseUrl: string,
+  file: File,
+  onProgress: (phase: string, percent: number) => void,
+  signal?: AbortSignal
+): Promise<{ repoName: string }> {
+  const baseUrl = normalizeServerUrl(serverBaseUrl);
+  const url = `${baseUrl}/repos/zip-upload-analyze`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'X-Zip-Name': file.name,
+    },
+    body: file,
+    signal,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error((err as { error?: string }).error || `Server ${res.status}`);
+  }
+  const contentType = res.headers.get('Content-Type') || '';
+  if (contentType.includes('application/json')) {
+    const data = (await res.json()) as { ok?: boolean; alreadyExists?: boolean; repoName?: string; error?: string };
+    if (data.alreadyExists && data.ok) {
+      onProgress('already_exists', 100);
+      return { repoName: data.repoName ?? (file.name.replace(/\.zip$/i, '') + '_zip') };
+    }
+    throw new Error(data.error || 'Request failed');
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const dataLine = line.match(/^data:\s*(.+)$/m)?.[1];
+      if (!dataLine) continue;
+      try {
+        const data = JSON.parse(dataLine) as { type: string; phase?: string; percent?: number; ok?: boolean; error?: string; repoName?: string };
+        if (data.type === 'extract_done') {
+          onProgress('extract_done', 5);
+        } else if (data.type === 'progress' && data.phase != null) {
+          onProgress(data.phase, typeof data.percent === 'number' ? data.percent : 0);
+        } else if (data.type === 'done') {
+          if (!data.ok) throw new Error(data.error || 'zip-upload-analyze failed');
+          return { repoName: data.repoName ?? (file.name.replace(/\.zip$/i, '') + '_zip') };
+        }
+      } catch (e) {
+        if (e instanceof SyntaxError) continue;
+        throw e;
+      }
+    }
+  }
+  throw new Error('zip-upload-analyze stream ended without done');
+}
+
 export async function fetchRepos(baseUrl: string): Promise<RepoSummary[]> {
   const response = await fetch(`${baseUrl}/repos`);
   if (!response.ok) throw new Error(`Server returned ${response.status}`);

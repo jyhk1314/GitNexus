@@ -178,9 +178,16 @@ export const JAVA_QUERIES = `
 
 // C queries - works with tree-sitter-c
 export const C_QUERIES = `
-; Functions
+; Functions (direct declarator)
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @definition.function
 (declaration declarator: (function_declarator declarator: (identifier) @name)) @definition.function
+
+; Functions returning pointers (pointer_declarator wraps function_declarator)
+(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
+(declaration declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
+
+; Functions returning double pointers (nested pointer_declarator)
+(function_definition declarator: (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name)))) @definition.function
 
 ; Structs, Unions, Enums, Typedefs
 (struct_specifier name: (type_identifier) @name) @definition.struct
@@ -228,9 +235,23 @@ export const CPP_QUERIES = `
 (namespace_definition name: (namespace_identifier) @name) @definition.namespace
 (enum_specifier name: (type_identifier) @name) @definition.enum
 
-; Functions & Methods
+; Typedefs and unions (common in C-style headers and mixed C/C++ code)
+(type_definition declarator: (type_identifier) @name) @definition.typedef
+(union_specifier name: (type_identifier) @name) @definition.union
+
+; Macros
+(preproc_function_def name: (identifier) @name) @definition.macro
+(preproc_def name: (identifier) @name) @definition.macro
+
+; Functions & Methods (direct declarator)
 (function_definition declarator: (function_declarator declarator: (identifier) @name)) @definition.function
-(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))) @definition.method
+(function_definition declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name))) @definition.function
+
+; Functions with qualified/const return types (e.g. "const char Foo(...)")
+; tree-sitter-cpp wraps the declarator in pointer_declarator for these cases
+(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @definition.function
+(function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (qualified_identifier name: (identifier) @name)))) @definition.function
+(function_definition declarator: (reference_declarator (function_declarator declarator: (identifier) @name))) @definition.function
 
 ; Templates
 (template_declaration (class_specifier name: (type_identifier) @name)) @definition.template

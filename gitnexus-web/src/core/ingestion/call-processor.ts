@@ -6,6 +6,7 @@ import { loadParser, loadLanguage } from '../tree-sitter/parser-loader';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries';
 import { generateId } from '../../lib/utils';
 import { getLanguageFromFilename } from './utils';
+import { SupportedLanguages } from '../../config/supported-languages';
 
 /**
  * Node types that represent function/method definitions across languages.
@@ -657,6 +658,17 @@ function extractLaravelRoutes(tree: any, filePath: string): ExtractedRoute[] {
 }
 
 /**
+ * True if two files have a reference (include/import) relationship in either direction.
+ * Used for C++ to only create CALLS when caller and callee files are related.
+ */
+const filesHaveReference = (fileA: string, fileB: string, importMap: ImportMap): boolean => {
+  if (fileA === fileB) return true;
+  if (importMap.get(fileA)?.has(fileB)) return true;
+  if (importMap.get(fileB)?.has(fileA)) return true;
+  return false;
+};
+
+/**
  * Resolution result with confidence scoring
  */
 interface ResolveResult {
@@ -670,8 +682,9 @@ interface ResolveResult {
  * A. Check imported files first (highest confidence)
  * B. Check local file definitions
  * C. Fuzzy global search (lowest confidence)
- * 
- * Returns confidence score so agents know what to trust.
+ *
+ * For C++: only create a call when target has the same name (already guaranteed by lookup)
+ * and caller/callee files have a reference (same file or include/import in either direction).
  */
 const resolveCallTarget = (
   calledName: string,
@@ -679,6 +692,9 @@ const resolveCallTarget = (
   symbolTable: SymbolTable,
   importMap: ImportMap
 ): ResolveResult | null => {
+  const language = getLanguageFromFilename(currentFile);
+  const isCpp = language === SupportedLanguages.CPlusPlus;
+
   // Strategy A: Check imported files (HIGH confidence - we know the import chain)
   const importedFiles = importMap.get(currentFile);
   if (importedFiles) {
@@ -696,10 +712,16 @@ const resolveCallTarget = (
     return { nodeId: localNodeId, confidence: 0.85, reason: 'same-file' };
   }
 
-  // Strategy C: Fuzzy global search (LOW confidence - just matching by name)
+  // Strategy C: Fuzzy global search (LOW confidence - just matching by name).
+  // C++: only accept when caller and callee files have a reference (same file or include in either direction).
   const fuzzyMatches = symbolTable.lookupFuzzy(calledName);
   if (fuzzyMatches.length > 0) {
-    // Lower confidence if multiple matches exist (more ambiguous)
+    if (isCpp) {
+      const defWithRef = fuzzyMatches.find(def => filesHaveReference(currentFile, def.filePath, importMap));
+      if (!defWithRef) return null;
+      const confidence = fuzzyMatches.length === 1 ? 0.5 : 0.3;
+      return { nodeId: defWithRef.nodeId, confidence, reason: 'fuzzy-global' };
+    }
     const confidence = fuzzyMatches.length === 1 ? 0.5 : 0.3;
     return { nodeId: fuzzyMatches[0].nodeId, confidence, reason: 'fuzzy-global' };
   }

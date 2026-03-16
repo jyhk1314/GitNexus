@@ -39,18 +39,18 @@ describe('getLanguageFromFilename', () => {
     });
   });
 
-  describe('C', () => {
-    it('detects .c files', () => {
-      expect(getLanguageFromFilename('main.c')).toBe(SupportedLanguages.C);
-    });
+  // describe('C', () => {
+  //   it('detects .c files', () => {
+  //     expect(getLanguageFromFilename('main.c')).toBe(SupportedLanguages.C);
+  //   });
 
-    it('detects .h header files', () => {
-      expect(getLanguageFromFilename('header.h')).toBe(SupportedLanguages.C);
-    });
-  });
+  //   it('detects .h header files', () => {
+  //     expect(getLanguageFromFilename('header.h')).toBe(SupportedLanguages.C);
+  //   });
+  // });
 
   describe('C++', () => {
-    it.each(['.cpp', '.cc', '.cxx', '.hpp', '.hxx', '.hh'])(
+    it.each(['.c', '.h', '.cpp', '.cc', '.cxx', '.hpp', '.hxx', '.hh'])(
       'detects %s files',
       (ext) => {
         expect(getLanguageFromFilename(`file${ext}`)).toBe(SupportedLanguages.CPlusPlus);

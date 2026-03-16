@@ -50,12 +50,27 @@ export default defineConfig({
     fs: {
       allow: ['..'],
     },
+    // Proxy Hugging Face 镜像，避免浏览器直连 hf-mirror.com 触发 CORS
+    proxy: {
+      '/hf-mirror': {
+        target: 'https://hf-mirror.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/hf-mirror/, ''),
+      },
+    },
   },
   // Also set for preview/production builds
   preview: {
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+    proxy: {
+      '/hf-mirror': {
+        target: 'https://hf-mirror.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/hf-mirror/, ''),
+      },
     },
   },
   // Worker configuration

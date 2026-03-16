@@ -116,6 +116,8 @@ interface AppState {
   // Multi-repo switching
   serverBaseUrl: string | null;
   setServerBaseUrl: (url: string | null) => void;
+  serverRepoName: string | null;
+  setServerRepoName: (name: string | null) => void;
   availableRepos: RepoSummary[];
   setAvailableRepos: (repos: RepoSummary[]) => void;
   switchRepo: (repoName: string) => Promise<void>;
@@ -132,6 +134,7 @@ interface AppState {
 
   // Embedding methods
   startEmbeddings: (forceDevice?: 'webgpu' | 'wasm') => Promise<void>;
+  setEmbeddingError: (message: string) => void;
   semanticSearch: (query: string, k?: number) => Promise<SemanticSearchResult[]>;
   semanticSearchWithContext: (query: string, k?: number, hops?: number) => Promise<any[]>;
   isEmbeddingReady: boolean;
@@ -147,6 +150,7 @@ interface AppState {
   isAgentReady: boolean;
   isAgentInitializing: boolean;
   agentError: string | null;
+  clearAgentError: () => void;
 
   // Chat state
   chatMessages: ChatMessage[];
@@ -156,6 +160,7 @@ interface AppState {
   // LLM methods
   refreshLLMSettings: () => void;
   initializeAgent: (overrideProjectName?: string) => Promise<void>;
+  initializeBackendAgent: (backendUrl: string, repoName: string, overrideProjectName?: string, fileContentsOverride?: Map<string, string>) => Promise<void>;
   sendChatMessage: (message: string) => Promise<void>;
   stopChatResponse: () => void;
   clearChat: () => void;
@@ -281,6 +286,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
 
   // Multi-repo switching
   const [serverBaseUrl, setServerBaseUrl] = useState<string | null>(null);
+  const [serverRepoName, setServerRepoName] = useState<string | null>(null);
   const [availableRepos, setAvailableRepos] = useState<RepoSummary[]>([]);
 
   // Embedding state
@@ -467,12 +473,30 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const runQuery = useCallback(async (cypher: string): Promise<any[]> => {
+    // In server mode, forward the Cypher query to the backend
+    if (serverBaseUrl && serverRepoName) {
+      const response = await fetch(`${serverBaseUrl}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cypher, repo: serverRepoName }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Backend query failed: ${response.status}`);
+      }
+      const body = await response.json();
+      return (body.result ?? body) as any[];
+    }
     const api = apiRef.current;
     if (!api) throw new Error('Worker not initialized');
     return api.runQuery(cypher);
-  }, []);
+  }, [serverBaseUrl, serverRepoName]);
 
   const isDatabaseReady = useCallback(async (): Promise<boolean> => {
+    // In server mode, the backend is always "ready" for queries
+    if (serverBaseUrl && serverRepoName) {
+      return true;
+    }
     const api = apiRef.current;
     if (!api) return false;
     try {
@@ -480,7 +504,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     } catch {
       return false;
     }
-  }, []);
+  }, [serverBaseUrl, serverRepoName]);
 
   // Embedding methods
   const startEmbeddings = useCallback(async (forceDevice?: 'webgpu' | 'wasm'): Promise<void> => {
@@ -525,6 +549,11 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       }
       throw error;
     }
+  }, []);
+
+  const setEmbeddingError = useCallback((message: string) => {
+    setEmbeddingStatus('error');
+    setEmbeddingProgress({ phase: 'error', percent: 0, error: message });
   }, []);
 
   const semanticSearch = useCallback(async (
@@ -604,6 +633,59 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [projectName]);
 
+  const initializeBackendAgent = useCallback(async (
+    backendUrl: string,
+    repoName: string,
+    overrideProjectName?: string,
+    fileContentsOverride?: Map<string, string>,
+  ): Promise<void> => {
+    const api = apiRef.current;
+    if (!api) {
+      setAgentError('Worker not initialized');
+      return;
+    }
+
+    const config = getActiveProviderConfig();
+    if (!config) {
+      setAgentError('Please configure an LLM provider in settings');
+      return;
+    }
+
+    setIsAgentInitializing(true);
+    setAgentError(null);
+
+    try {
+      const effectiveProjectName = overrideProjectName || projectName || repoName;
+      // Use override if provided (avoids stale closure when called right after setFileContents)
+      const contentsMap = fileContentsOverride ?? fileContents;
+      // Serialize fileContents Map to entries array (Comlink can't transfer Maps)
+      const fileContentsEntries: [string, string][] = Array.from(contentsMap.entries());
+      const result = await api.initializeBackendAgent(
+        config,
+        backendUrl,
+        repoName,
+        fileContentsEntries,
+        effectiveProjectName,
+      );
+      if (result.success) {
+        setIsAgentReady(true);
+        setAgentError(null);
+        if (import.meta.env.DEV) {
+          console.log('✅ Backend agent initialized successfully');
+        }
+      } else {
+        setAgentError(result.error ?? 'Failed to initialize backend agent');
+        setIsAgentReady(false);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setAgentError(message);
+      setIsAgentReady(false);
+    } finally {
+      setIsAgentInitializing(false);
+    }
+  }, [projectName, fileContents]);
+
   const sendChatMessage = useCallback(async (message: string): Promise<void> => {
     const api = apiRef.current;
     if (!api) {
@@ -617,9 +699,16 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     clearAIToolHighlights();
 
     if (!isAgentReady) {
-      // Try to initialize first
-      await initializeAgent();
+      // server 模式用 backend agent，本地模式用 local agent
+      if (serverBaseUrl && serverRepoName) {
+        await initializeBackendAgent(serverBaseUrl, serverRepoName, projectName || serverRepoName);
+      } else {
+        await initializeAgent(projectName || undefined);
+      }
       if (!apiRef.current) return;
+      // 初始化后再检查是否成功
+      const ready = await apiRef.current.isAgentReady();
+      if (!ready) return;
     }
 
     // Add user message
@@ -955,7 +1044,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       setIsChatLoading(false);
       setCurrentToolCalls([]);
     }
-  }, [chatMessages, isAgentReady, initializeAgent, resolveFilePath, findFileNodeId, addCodeReference, clearAICodeReferences, clearAIToolHighlights, graph, embeddingStatus]);
+  }, [chatMessages, isAgentReady, initializeAgent, initializeBackendAgent, serverBaseUrl, serverRepoName, projectName, resolveFilePath, findFileNodeId, addCodeReference, clearAICodeReferences, clearAIToolHighlights, graph, embeddingStatus]);
 
   const stopChatResponse = useCallback(() => {
     const api = apiRef.current;
@@ -969,6 +1058,10 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const clearChat = useCallback(() => {
     setChatMessages([]);
     setCurrentToolCalls([]);
+    setAgentError(null);
+  }, []);
+
+  const clearAgentError = useCallback(() => {
     setAgentError(null);
   }, []);
 
@@ -1019,7 +1112,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
 
       setViewMode('exploring');
 
-      if (getActiveProviderConfig()) initializeAgent(pName);
+      // Update serverRepoName for Cypher query routing
+      setServerRepoName(repoName);
+
+      if (getActiveProviderConfig()) {
+        // In server mode, use backend agent; pass fileMap directly to avoid stale closure
+        initializeBackendAgent(serverBaseUrl, repoName, pName, fileMap);
+      }
 
       startEmbeddings().catch((err) => {
         if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
@@ -1037,7 +1136,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       });
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, 3000);
     }
-  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, initializeAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, setServerRepoName, initializeBackendAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   const removeCodeReference = useCallback((id: string) => {
     setCodeReferences(prev => {
@@ -1135,6 +1234,8 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     // Multi-repo switching
     serverBaseUrl,
     setServerBaseUrl,
+    serverRepoName,
+    setServerRepoName,
     availableRepos,
     setAvailableRepos,
     switchRepo,
@@ -1146,6 +1247,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     embeddingStatus,
     embeddingProgress,
     startEmbeddings,
+    setEmbeddingError,
     semanticSearch,
     semanticSearchWithContext,
     isEmbeddingReady: embeddingStatus === 'ready',
@@ -1159,6 +1261,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     isAgentReady,
     isAgentInitializing,
     agentError,
+    clearAgentError,
     // Chat state
     chatMessages,
     isChatLoading,
@@ -1166,6 +1269,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     // LLM methods
     refreshLLMSettings,
     initializeAgent,
+    initializeBackendAgent,
     sendChatMessage,
     stopChatResponse,
     clearChat,
