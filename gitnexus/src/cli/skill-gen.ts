@@ -216,7 +216,7 @@ const buildCommunitiesFromMemberships = (
       const parts = normalized.split('/').filter(Boolean);
       if (parts.length >= 2) {
         const folder = parts[parts.length - 2];
-        if (!['src', 'lib', 'core', 'utils', 'common', 'shared', 'helpers'].includes(folder.toLowerCase())) {
+        if (!['src', 'lib', 'core', 'utils', 'common', 'shared', 'helpers', 'app', 'helper'].includes(folder.toLowerCase())) {
           folderCounts.set(folder, (folderCounts.get(folder) || 0) + 1);
         }
       }

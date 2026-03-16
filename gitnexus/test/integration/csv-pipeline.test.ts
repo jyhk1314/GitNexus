@@ -9,7 +9,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createTempDir, type TestDBHandle } from '../helpers/test-db.js';
 import { buildTestGraph } from '../helpers/test-graph.js';
-import { streamAllCSVsToDisk } from '../../src/core/kuzu/csv-generator.js';
+import { streamAllCSVsToDisk } from '../../src/core/lbug/csv-generator.js';
 
 let tmpHandle: TestDBHandle;
 let csvDir: string;
@@ -169,6 +169,26 @@ describe('streamAllCSVsToDisk', () => {
       label: 'File',
       properties: { name: 'index.ts', filePath: 'src/index.ts' },
     });
+
+    const result = await streamAllCSVsToDisk(graph, repoDir, csvDir);
+    const fileCsv = result.nodeFiles.get('File');
+    expect(fileCsv).toBeDefined();
+    expect(fileCsv!.rows).toBe(1);
+  });
+
+  // ─── Unhappy paths ──────────────────────────────────────────────────
+
+  it('handles empty graph (zero nodes)', async () => {
+    const graph = buildTestGraph([], []);
+    const result = await streamAllCSVsToDisk(graph, repoDir, csvDir);
+    expect(result.nodeFiles.size).toBe(0);
+    expect(result.relRows).toBe(0);
+  });
+
+  it('handles node with empty string properties', async () => {
+    const graph = buildTestGraph([
+      { id: 'file:empty', label: 'File', name: '', filePath: '' },
+    ]);
 
     const result = await streamAllCSVsToDisk(graph, repoDir, csvDir);
     const fileCsv = result.nodeFiles.get('File');
