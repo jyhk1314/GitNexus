@@ -1,3 +1,13 @@
+## 与 https://github.com/abhigyanpatwari/GitNexus 差异内容分析:
+
+### 后台服务
+
+#### gitnexus/scripts
+1. gitnexus下载仓库后, 自动转换所有字符集到UTF8
+
+#### 
+
+
 1、gitnexus支持对接公司git
 2、gitnexus优化C++函数调用关系：相同函数名称并且文件有引用关系的才存在调用关系
 3、gitnexus serve支持API，一键下载并分析代码，代码放在环境变量HOME或服务启动路径下，目录名称为ginexus_code，当代码已存在(registry.json)中存在，就禁止重复下载代码。分析的进度要能返回给客户端。
