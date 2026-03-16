@@ -316,6 +316,50 @@ export const QueryFAB = () => {
           />
         </div>
 
+        {showSaveInput && (
+          <div className="flex items-center gap-2 mt-3">
+            <input
+              ref={saveLabelRef}
+              value={saveLabel}
+              onChange={(e) => setSaveLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSaveQuery();
+                if (e.key === 'Escape') { setShowSaveInput(false); setSaveLabel(''); }
+              }}
+              placeholder="查询名称"
+              className="
+                flex-1 px-2 py-1.5
+                bg-surface border border-cyan-500/40 rounded-md
+                text-xs text-text-primary
+                placeholder:text-text-muted
+                focus:border-cyan-500/70 focus:ring-1 focus:ring-cyan-500/20
+                outline-none
+              "
+            />
+            <button
+              onClick={handleSaveQuery}
+              disabled={!saveLabel.trim()}
+              className="
+                flex items-center gap-1 px-2.5 py-1.5
+                text-xs font-medium
+                text-cyan-400 hover:bg-cyan-500/10
+                border border-cyan-500/30 rounded-md
+                disabled:opacity-40 disabled:cursor-not-allowed
+                transition-colors
+              "
+            >
+              <BookmarkPlus className="w-3.5 h-3.5" />
+              <span>保存</span>
+            </button>
+            <button
+              onClick={() => { setShowSaveInput(false); setSaveLabel(''); }}
+              className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-hover transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         <div className="flex items-center justify-between mt-3">
           <div className="relative">
             <button
@@ -401,61 +445,20 @@ export const QueryFAB = () => {
               </button>
             )}
 
-            {showSaveInput ? (
-              <div className="flex items-center gap-1">
-                <input
-                  ref={saveLabelRef}
-                  value={saveLabel}
-                  onChange={(e) => setSaveLabel(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveQuery();
-                    if (e.key === 'Escape') { setShowSaveInput(false); setSaveLabel(''); }
-                  }}
-                  placeholder="查询名称"
-                  className="
-                    w-32 px-2 py-1
-                    bg-surface border border-cyan-500/40 rounded-md
-                    text-xs text-text-primary
-                    placeholder:text-text-muted
-                    focus:border-cyan-500/70 focus:ring-1 focus:ring-cyan-500/20
-                    outline-none
-                  "
-                />
-                <button
-                  onClick={handleSaveQuery}
-                  disabled={!saveLabel.trim()}
-                  className="
-                    p-1.5 rounded-md
-                    text-cyan-400 hover:bg-cyan-500/10
-                    disabled:opacity-40 disabled:cursor-not-allowed
-                    transition-colors
-                  "
-                >
-                  <BookmarkPlus className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => { setShowSaveInput(false); setSaveLabel(''); }}
-                  className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-hover transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ) : (
-              query.trim() && (
-                <button
-                  onClick={handleShowSaveInput}
-                  className="
-                    flex items-center gap-1 px-2.5 py-1.5
-                    text-xs text-text-secondary
-                    hover:text-cyan-400 hover:bg-cyan-500/10
-                    rounded-md transition-colors
-                  "
-                  title="保存此查询"
-                >
-                  <BookmarkPlus className="w-3.5 h-3.5" />
-                  <span>Save</span>
-                </button>
-              )
+            {!showSaveInput && query.trim() && (
+              <button
+                onClick={handleShowSaveInput}
+                className="
+                  flex items-center gap-1 px-2.5 py-1.5
+                  text-xs text-text-secondary
+                  hover:text-cyan-400 hover:bg-cyan-500/10
+                  rounded-md transition-colors
+                "
+                title="保存此查询"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                <span>Save</span>
+              </button>
             )}
 
             <button
