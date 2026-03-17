@@ -9,6 +9,7 @@ export const DEFAULT_CPP_EXPORT_MACROS = [
   'DLL_API',
   'DLL_SQLPARSE_API',
   'DLLEXPORT',
+  'DLL_INTERFACE_API',
 ] as const;
 
 /**
