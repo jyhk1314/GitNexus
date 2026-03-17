@@ -546,11 +546,18 @@ export const QueryFAB = () => {
                     <tbody>
                       {pagedRows.map((row, i) => (
                         <tr key={i} className="hover:bg-hover/50 transition-colors">
-                          {Object.values(row).map((val, j) => (
-                            <td key={j} className="px-3 py-1.5 text-text-secondary border-b border-border-subtle/50 font-mono truncate max-w-[200px]">
-                              {typeof val === 'object' ? JSON.stringify(val) : String(val ?? '')}
-                            </td>
-                          ))}
+                          {Object.values(row).map((val, j) => {
+                            const displayVal = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
+                            return (
+                              <td
+                                key={j}
+                                className="px-3 py-1.5 text-text-secondary border-b border-border-subtle/50 font-mono truncate max-w-[200px]"
+                                title={displayVal}
+                              >
+                                {displayVal}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>

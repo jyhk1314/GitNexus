@@ -108,7 +108,7 @@
 
 1. **DropZone.tsx - 文件上传和仓库连接组件增强，新增onZipUploadToServer prop和localgit tab，支持Local Git和ZIP Upload代理模式，新增状态管理（localGitUrl、localGitToken、localGitBranch、localGitProxyUrl、zipProxyUrl、serverRepoName等），进度状态增强支持文件数量，URL参数支持，新增handleZipFile和handleLocalGitClone函数，详细的进度阶段映射（中文），Server Tab增强新增serverRepoName输入框和说明文字**
 2. **GraphCanvas.tsx - 图形画布组件增强，节点点击聚焦增强，Ref暴露增强使用双重requestAnimationFrame延迟调用和force参数，聚焦选中节点增强**
-3. **QueryFAB.tsx - Cypher查询浮动按钮组件增强，查询保存功能（localStorage），内置查询从5个扩展到13个（中文标签），结果分页功能（50条/页），保存查询UI和查询列表UI改进**
+3. **QueryFAB.tsx - Cypher查询浮动按钮组件增强，查询保存功能（localStorage），内置查询从5个扩展到13个（中文标签），结果分页功能（50条/页），保存查询UI和查询列表UI改进，表格单元格超长内容悬停显示完整内容（title tooltip）**
 4. **RightPanel.tsx - 右侧面板组件增强，递归限制配置功能，错误处理改进（可关闭错误提示），LLM设置集成，状态栏布局改进**
 5. **SettingsPanel.tsx - 设置面板组件增强，模型搜索功能（SearchableModelCombobox），OpenAI和Ollama模型加载功能，OpenRouter模型选择改进，后端URL默认值从4747改为6660**
 
