@@ -44,20 +44,23 @@
 
 #### 五、gitnexus/src/core
 
-**核心模块增强：**
+**C++解析优化及核心模块增强：**
 
 1. **embeddings/embedder.ts - 中文本地化支撑，添加Hugging Face镜像站配置（hf-mirror.com），避免直连慢或不可用**
 2. **ingestion/community-processor.ts - 社区检测优化，扩展通用目录过滤列表，新增app和helper目录名**
 3. **ingestion/constants.ts - Tree-sitter缓冲区大小优化，从512KB提升到2MB，避免跳过较大文件**
 4. **ingestion/filesystem-walker.ts - 文件大小限制优化，从512KB提升到2MB**
 5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能**
-6. **ingestion/parsing-processor.ts - 进度优化, 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：将enclosingClassId计算移至nodeId生成之前，有enclosingClassId时用其替代filePath作为scope key，使.h声明和.cpp定义合并为同一图节点；C++ Function节点有所属类时label提升为Method；C++ class/struct节点使用不含filePath的id**
+6. **ingestion/parsing-processor.ts - 进度优化, 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：将enclosingClassId计算移至nodeId生成之前，有enclosingClassId时用其替代filePath作为scope key，使.h声明和.cpp定义合并为同一图节点；C++ Function节点有所属类时label提升为Method；C++ class/struct节点使用不含filePath的id；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
 7. **ingestion/pipeline.ts - 进度优化**
 8. **lbug/csv-generator.ts - 文件截断大小优化**
 9. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; C++ CPP_QUERIES补全类内方法声明捕获：修复field_declaration规则中identifier→field_identifier/operator_name，新增pointer_declarator包裹的返回指针方法规则，新增类内析构函数declaration规则**
-10. **ingestion/workers/parse-worker.ts - 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：enclosingClassId提前计算，nodeId scope改为class-scoped；effectiveLabel机制（Function→Method提升）；findEnclosingFunctionId同步使用class-scoped id；C++ class/struct使用不含filePath的nodeId**
+10. **ingestion/workers/parse-worker.ts - 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：enclosingClassId提前计算，nodeId scope改为class-scoped；effectiveLabel机制（Function→Method提升）；findEnclosingFunctionId同步使用class-scoped id；C++ class/struct使用不含filePath的nodeId；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
 11. **ingestion/utils.ts - C++ HAS_METHOD关系完整性修复：findEnclosingClassId新增qualified_identifier处理，从out-of-line方法定义（ClassName::method）的scope提取类名，返回不含filePath的classId；类内方法的classId也改为不含filePath，使.h和.cpp两侧id一致**
-12. **ingestion/call-processor.ts - C++ HAS_METHOD关系完整性修复：Laravel路由猜测的guessedId改为用controller的nodeId（classId）作为scope，与class-scoped nodeId方案保持一致**
+12. **ingestion/call-processor.ts - C++ HAS_METHOD关系完整性修复：Laravel路由猜测的guessedId改为用controller的nodeId（classId）作为scope，与class-scoped nodeId方案保持一致；C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
+13. **ingestion/cpp-export-macro-preprocess.ts - 新增文件，C++解析前strip导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT），解决tree-sitter-cpp无法解析class MACRO Type的问题，preprocessCppExportMacros供parse-worker、parsing-processor、call-processor、heritage-processor、import-processor调用**
+14. **ingestion/heritage-processor.ts - C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
+15. **ingestion/import-processor.ts - C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
 
 #### 六、gitnexus-web/src/lib
 

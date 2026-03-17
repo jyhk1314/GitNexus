@@ -22,8 +22,10 @@ import {
 import { buildTypeEnv } from './type-env.js';
 import type { ConstructorBinding } from './type-env.js';
 import { getTreeSitterBufferSize } from './constants.js';
+import { preprocessCppExportMacros } from './cpp-export-macro-preprocess.js';
 import type { ExtractedCall, ExtractedHeritage, ExtractedRoute, FileConstructorBindings } from './workers/parse-worker.js';
 import { callRouters } from './call-routing.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
 
 /**
  * Walk up the AST from a node to find the enclosing function/method.
@@ -147,8 +149,12 @@ export const processCalls = async (
 
     let tree = astCache.get(file.path);
     if (!tree) {
+      let content = file.content;
+      if (language === SupportedLanguages.CPlusPlus) {
+        content = preprocessCppExportMacros(content);
+      }
       try {
-        tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
+        tree = parser.parse(content, undefined, { bufferSize: getTreeSitterBufferSize(content.length) });
       } catch (parseError) {
         continue;
       }

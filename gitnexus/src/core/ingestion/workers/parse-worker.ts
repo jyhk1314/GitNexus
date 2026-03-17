@@ -33,6 +33,7 @@ import {
   inferCallForm,
   extractReceiverName
 } from '../utils.js';
+import { preprocessCppExportMacros } from '../cpp-export-macro-preprocess.js';
 import { buildTypeEnv } from '../type-env.js';
 import type { ConstructorBinding } from '../type-env.js';
 import { isNodeExported } from '../export-detection.js';
@@ -826,9 +827,14 @@ const processFileGroup = (
     // Skip files larger than the max tree-sitter buffer (32 MB)
     if (file.content.length > TREE_SITTER_MAX_BUFFER) continue;
 
+    let content = file.content;
+    if (language === SupportedLanguages.CPlusPlus) {
+      content = preprocessCppExportMacros(content);
+    }
+
     let tree;
     try {
-      tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
+      tree = parser.parse(content, undefined, { bufferSize: getTreeSitterBufferSize(content.length) });
     } catch (err) {
       console.warn(`Failed to parse file ${file.path}: ${err instanceof Error ? err.message : String(err)}`);
       continue;

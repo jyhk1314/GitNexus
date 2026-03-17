@@ -6,6 +6,7 @@ import { generateId } from '../../lib/utils.js';
 import { SymbolTable } from './symbol-table.js';
 import { ASTCache } from './ast-cache.js';
 import { getLanguageFromFilename, yieldToEventLoop, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures, findEnclosingClassId, extractMethodSignature } from './utils.js';
+import { preprocessCppExportMacros } from './cpp-export-macro-preprocess.js';
 import { isNodeExported } from './export-detection.js';
 import { detectFrameworkFromAST } from './framework-detection.js';
 import { typeConfigs } from './type-extractors/index.js';
@@ -132,9 +133,14 @@ const processParsingSequential = async (
       continue;  // parser unavailable — already warned in pipeline
     }
 
+    let content = file.content;
+    if (language === SupportedLanguages.CPlusPlus) {
+      content = preprocessCppExportMacros(content);
+    }
+
     let tree;
     try {
-      tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
+      tree = parser.parse(content, undefined, { bufferSize: getTreeSitterBufferSize(content.length) });
     } catch (parseError) {
       console.warn(`Skipping unparseable file: ${file.path}`);
       continue;

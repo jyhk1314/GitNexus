@@ -23,6 +23,7 @@ import { generateId } from '../../lib/utils.js';
 import { getLanguageFromFilename, isVerboseIngestionEnabled, yieldToEventLoop } from './utils.js';
 import { SupportedLanguages } from '../../config/supported-languages.js';
 import { getTreeSitterBufferSize } from './constants.js';
+import { preprocessCppExportMacros } from './cpp-export-macro-preprocess.js';
 import type { ExtractedHeritage } from './workers/parse-worker.js';
 import type { ResolutionContext } from './resolution-context.js';
 
@@ -119,9 +120,13 @@ export const processHeritage = async (
     // 3. Get AST
     let tree = astCache.get(file.path);
     if (!tree) {
+      let content = file.content;
+      if (language === SupportedLanguages.CPlusPlus) {
+        content = preprocessCppExportMacros(content);
+      }
       // Use larger bufferSize for files > 32KB
       try {
-        tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
+        tree = parser.parse(content, undefined, { bufferSize: getTreeSitterBufferSize(content.length) });
       } catch (parseError) {
         // Skip files that can't be parsed
         continue;

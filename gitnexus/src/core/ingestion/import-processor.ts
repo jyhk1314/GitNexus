@@ -9,6 +9,7 @@ import { SupportedLanguages } from '../../config/supported-languages.js';
 import { extractNamedBindings } from './named-binding-extraction.js';
 import type { ExtractedImport } from './workers/parse-worker.js';
 import { getTreeSitterBufferSize } from './constants.js';
+import { preprocessCppExportMacros } from './cpp-export-macro-preprocess.js';
 import {
   loadTsconfigPaths,
   loadGoModulePath,
@@ -393,8 +394,12 @@ export const processImports = async (
     let wasReparsed = false;
 
     if (!tree) {
+      let content = file.content;
+      if (language === SupportedLanguages.CPlusPlus) {
+        content = preprocessCppExportMacros(content);
+      }
       try {
-        tree = parser.parse(file.content, undefined, { bufferSize: getTreeSitterBufferSize(file.content.length) });
+        tree = parser.parse(content, undefined, { bufferSize: getTreeSitterBufferSize(content.length) });
       } catch (parseError) {
         continue;
       }
