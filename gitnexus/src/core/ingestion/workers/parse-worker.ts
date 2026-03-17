@@ -1053,6 +1053,13 @@ const processFileGroup = (
         }
         if (isCppConstructorDecl) continue;
       }
+
+      // C++: declaration (e.g. void foo();) is AST type declaration, not function_definition — skip.
+      if (language === SupportedLanguages.CPlusPlus && captureMap['definition.function']) {
+        const defNode = getDefinitionNodeFromCaptures(captureMap);
+        if (defNode?.type === 'declaration') continue;
+      }
+
       const definitionNode = getDefinitionNodeFromCaptures(captureMap);
       const startLine = definitionNode ? definitionNode.startPosition.row : (nameNode ? nameNode.startPosition.row : 0);
 

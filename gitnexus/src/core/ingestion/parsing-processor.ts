@@ -204,6 +204,12 @@ const processParsingSequential = async (
         if (isCppConstructorDecl) return;
       }
 
+      // C++: declaration (e.g. void foo();) is AST type declaration, not function_definition — skip.
+      if (language === SupportedLanguages.CPlusPlus && captureMap['definition.function']) {
+        const defNode = getDefinitionNodeFromCaptures(captureMap);
+        if (defNode?.type === 'declaration') return;
+      }
+
       let nodeLabel = 'CodeElement';
 
       if (captureMap['definition.function']) nodeLabel = 'Function';
