@@ -25,6 +25,7 @@
 7. **api.ts - 导入依赖扩展，新增文件系统操作、进程管理、ZIP处理等功能**
 8. **api.ts - 错误处理和日志优化，更详细的错误处理、过滤噪音日志、完善流式响应错误处理**
 9. **api.ts - 路径处理工具函数，getCodeBaseDir、getCodeDir、getRepoNameFromUrl、pathEquals等跨平台路径处理**
+10. **mcp-http.ts - DELETE /api/mcp/sessions/:sessionId，手动清理 MCP session 接口，支持按 sessionId 关闭并移除会话，成功返回 204，不存在返回 404**
 
 #### 三、gitnexus/src/mcp/core
 

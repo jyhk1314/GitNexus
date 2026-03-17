@@ -95,6 +95,21 @@ export function mountMCPEndpoints(app: Express, backend: LocalBackend): () => Pr
     });
   });
 
+  /** DELETE /api/mcp/sessions/:sessionId — manually close and remove a session */
+  app.delete('/api/mcp/sessions/:sessionId', (req: Request, res: Response) => {
+    const sessionId = req.params.sessionId;
+    const session = sessions.get(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    try {
+      session.server.close();
+    } catch {}
+    sessions.delete(sessionId);
+    res.status(204).send();
+  });
+
   const cleanup = async () => {
     clearInterval(cleanupTimer);
     const closers = [...sessions.values()].map(async session => {
