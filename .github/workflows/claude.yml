@@ -9,24 +9,15 @@ on:
     types: [opened, assigned]
   pull_request_review:
     types: [submitted]
-  # TEMP: Manual trigger to test fork checkout fix from a feature branch.
-  # Remove before merging to main.
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: 'PR number to test against'
-        required: true
-        type: string
 
 # Serialize per-PR/issue to avoid racing comments.
 concurrency:
-  group: claude-code-${{ github.event.issue.number || github.event.pull_request.number || github.event.issue.id || github.run_id }}
+  group: claude-code-${{ github.event.issue.number || github.event.pull_request.number || github.event.issue.id }}
   cancel-in-progress: false
 
 jobs:
   claude:
     if: |
-      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
@@ -48,9 +39,7 @@ jobs:
           script: |
             // Determine if this event is PR-related
             let prNumber = null;
-            if (context.eventName === 'workflow_dispatch') {
-              prNumber = Number(context.payload.inputs.pr_number);
-            } else if (context.eventName === 'issue_comment' && context.payload.issue.pull_request) {
+            if (context.eventName === 'issue_comment' && context.payload.issue.pull_request) {
               prNumber = context.payload.issue.number;
             } else if (context.eventName === 'pull_request_review_comment') {
               prNumber = context.payload.pull_request.number;
