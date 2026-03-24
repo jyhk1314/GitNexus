@@ -5,7 +5,7 @@
 ---
 
 ## 打包方式
-cd d:\github\GitNexus\gitnexus; npm run build 2>&1
+`cd d:\github\GitNexus\gitnexus; npm run build 2>&1`
 
 ---
 
