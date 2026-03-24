@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppStateProvider, useAppState } from './hooks/useAppState';
 import { DropZone } from './components/DropZone';
 import { LoadingOverlay } from './components/LoadingOverlay';
@@ -9,10 +9,17 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { StatusBar } from './components/StatusBar';
 import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
-import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
-import { connectToServer, fetchRepos, normalizeServerUrl, uploadZipAnalyzeOnServer, type ConnectToServerResult } from './services/server-connection';
+import {
+  cloneAnalyzeOnServer,
+  connectToServer,
+  fetchRepos,
+  normalizeServerUrl,
+  uploadZipAnalyzeOnServer,
+  type ConnectToServerResult,
+} from './services/server-connection';
+import { cloneAnalyzeProgressFromServer } from './utils/clone-analyze-progress';
 
 const AppContent = () => {
   const {
@@ -25,7 +32,6 @@ const AppContent = () => {
     progress,
     isRightPanelOpen,
     runPipeline,
-    runPipelineFromFiles,
     isSettingsPanelOpen,
     setSettingsPanelOpen,
     refreshLLMSettings,
@@ -48,6 +54,12 @@ const AppContent = () => {
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
+  const longOpAbortRef = useRef<AbortController | null>(null);
+  const [loadingAllowCancel, setLoadingAllowCancel] = useState(false);
+
+  const handleLoadingCancel = useCallback(() => {
+    longOpAbortRef.current?.abort();
+  }, []);
 
   const handleFileSelect = useCallback(async (file: File) => {
     const projectName = file.name.replace('.zip', '');
@@ -99,70 +111,18 @@ const AppContent = () => {
     }
   }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipeline, startEmbeddings, setEmbeddingError, initializeAgent]);
 
-  const handleGitClone = useCallback(async (files: FileEntry[]) => {
-    const firstPath = files[0]?.path || 'repository';
-    const projectName = firstPath.split('/')[0].replace(/-\d+$/, '') || 'repository';
-
-    setProjectName(projectName);
-    setProgress({ phase: 'extracting', percent: 0, message: 'Starting...', detail: 'Preparing to process files' });
-    setViewMode('loading');
-
-    try {
-      const result = await runPipelineFromFiles(files, (progress) => {
-        setProgress(progress);
-      });
-
-      setGraph(result.graph);
-      setFileContents(result.fileContents);
-      setViewMode('exploring');
-
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      if (result.lbugReady !== false) {
-        startEmbeddings().catch((err) => {
-          if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-            startEmbeddings('wasm').catch(console.warn);
-          } else {
-            console.warn('Embeddings auto-start failed:', err);
-          }
-        });
-      } else {
-        setEmbeddingError(
-          '向量检索不可用：内存数据库加载失败（常见原因：跨域或未开启 SharedArrayBuffer）。关键词检索与图谱仍可用。'
-        );
-      }
-    } catch (error) {
-      console.error('Pipeline error:', error);
-      setProgress({
-        phase: 'error',
-        percent: 0,
-        message: 'Error processing repository',
-        detail: error instanceof Error ? error.message : 'Unknown error',
-      });
-      setTimeout(() => {
-        setViewMode('onboarding');
-        setProgress(null);
-      }, 3000);
-    }
-  }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddings, setEmbeddingError, initializeAgent]);
-
   const handleServerConnect = useCallback((
     result: ConnectToServerResult,
     baseUrl?: string,
     repoName?: string,
   ) => {
-    // Extract project name from repoPath
     const repoPath = result.repoInfo.repoPath;
     const projectName = result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
     setProjectName(projectName);
 
-    // Store repo name for server mode queries
     const effectiveRepoName = repoName || result.repoInfo.name || projectName;
     setServerRepoName(effectiveRepoName);
 
-    // Build KnowledgeGraph from server data (bypasses WASM pipeline entirely)
     const graph = createKnowledgeGraph();
     for (const node of result.nodes) {
       graph.addNode(node);
@@ -172,26 +132,20 @@ const AppContent = () => {
     }
     setGraph(graph);
 
-    // Set file contents from extracted File node content
     const fileMap = new Map<string, string>();
     for (const [path, content] of Object.entries(result.fileContents)) {
       fileMap.set(path, content);
     }
     setFileContents(fileMap);
 
-    // Transition directly to exploring view
     setViewMode('exploring');
 
-    // Initialize backend agent if LLM is configured
-    // Pass fileMap directly to avoid stale closure (setFileContents is async)
     if (getActiveProviderConfig() && baseUrl) {
       initializeBackendAgent(baseUrl, effectiveRepoName, projectName, fileMap);
     } else if (getActiveProviderConfig()) {
-      // Fallback: try local agent (will fail gracefully if KuzuDB not loaded)
       initializeAgent(projectName);
     }
 
-    // Auto-start embeddings
     startEmbeddings().catch((err) => {
       if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
         startEmbeddings('wasm').catch(console.warn);
@@ -200,6 +154,168 @@ const AppContent = () => {
       }
     });
   }, [setViewMode, setGraph, setFileContents, setProjectName, setServerRepoName, initializeAgent, initializeBackendAgent, startEmbeddings]);
+
+  const handleLocalGitSubmit = useCallback(
+    async (args: { proxyUrl: string; repoUrl: string; token?: string; branch?: string }) => {
+      const { proxyUrl, repoUrl, token, branch } = args;
+      const proxyTrimmed = proxyUrl.trim();
+      const branchTrimmed = (branch || '').trim();
+
+      const aborter = new AbortController();
+      longOpAbortRef.current = aborter;
+      setLoadingAllowCancel(true);
+
+      let receivedAlreadyExists = false;
+
+      const resolveRepoName = (): string | undefined => {
+        try {
+          const u = new URL(repoUrl);
+          const segs = u.pathname.split('/').filter(Boolean);
+          const baseName = segs.length ? segs[segs.length - 1].replace(/\.git$/i, '') : undefined;
+          if (baseName && branchTrimmed) {
+            const branchSuffix = branchTrimmed.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            return `${baseName}_${branchSuffix}`;
+          }
+          return baseName;
+        } catch {
+          return undefined;
+        }
+      };
+
+      setProgress({
+        phase: 'extracting',
+        percent: 0,
+        message: 'Starting...',
+        detail: 'Preparing server clone',
+      });
+      setViewMode('loading');
+
+      try {
+        await cloneAnalyzeOnServer(
+          proxyTrimmed,
+          repoUrl,
+          token,
+          (phaseRaw, percent) => {
+            if (aborter.signal.aborted) return;
+            setProgress(cloneAnalyzeProgressFromServer(phaseRaw, percent));
+            const fileMatch = phaseRaw.match(/^(.+)\|(\d+)\|(\d+)$/);
+            const phase = fileMatch ? fileMatch[1] : phaseRaw;
+            if (phase === 'already_exists') {
+              receivedAlreadyExists = true;
+            }
+          },
+          aborter.signal,
+          branchTrimmed || undefined
+        );
+
+        if (receivedAlreadyExists) {
+          const repoName = resolveRepoName();
+          setProgress({ phase: 'extracting', percent: 90, message: '已存在，正在连接…', detail: repoName || '' });
+          const result = await connectToServer(
+            proxyTrimmed,
+            (phase, downloaded, total) => {
+              if (phase === 'validating') {
+                setProgress({ phase: 'extracting', percent: 91, message: 'Connecting...', detail: 'Validating' });
+              } else if (phase === 'downloading') {
+                const pct = total ? 91 + Math.round((downloaded / total) * 8) : 95;
+                setProgress({
+                  phase: 'extracting',
+                  percent: pct,
+                  message: 'Downloading graph...',
+                  detail: `${(downloaded / (1024 * 1024)).toFixed(1)} MB`,
+                });
+              } else if (phase === 'extracting') {
+                setProgress({ phase: 'extracting', percent: 99, message: 'Processing...', detail: 'Extracting' });
+              }
+            },
+            aborter.signal,
+            repoName
+          );
+          const baseUrl = normalizeServerUrl(proxyTrimmed);
+          setServerBaseUrl(baseUrl);
+          const effectiveRepo = repoName || result.repoInfo.name;
+          setServerRepoName(effectiveRepo);
+          handleServerConnect(result, baseUrl, effectiveRepo);
+          try {
+            const allRepos = await fetchRepos(baseUrl);
+            setAvailableRepos(allRepos);
+          } catch (e) {
+            console.warn('Failed to fetch repo list:', e);
+          }
+          return;
+        }
+
+        localStorage.setItem('gitnexus-localgit-url', repoUrl.trim());
+        localStorage.setItem('gitnexus-localgit-proxy-url', proxyTrimmed);
+        localStorage.setItem('gitnexus-localgit-branch', branchTrimmed);
+
+        const repoName = resolveRepoName();
+
+        setProgress({ phase: 'extracting', percent: 95, message: 'Connecting...', detail: 'Fetching graph' });
+        const result = await connectToServer(
+          proxyTrimmed,
+          (phase, downloaded, total) => {
+            if (phase === 'validating') {
+              setProgress({ phase: 'extracting', percent: 95, message: 'Connecting...', detail: 'Validating' });
+            } else if (phase === 'downloading') {
+              const pct = total ? 95 + (downloaded / total) * 5 : 97;
+              setProgress({
+                phase: 'extracting',
+                percent: Math.round(pct),
+                message: 'Downloading graph...',
+                detail: `${(downloaded / (1024 * 1024)).toFixed(1)} MB`,
+              });
+            } else if (phase === 'extracting') {
+              setProgress({ phase: 'extracting', percent: 99, message: 'Processing...', detail: 'Extracting' });
+            }
+          },
+          aborter.signal,
+          repoName
+        );
+
+        const baseUrl = normalizeServerUrl(proxyTrimmed);
+        setServerBaseUrl(baseUrl);
+        const effectiveRepo = repoName || result.repoInfo.name || '';
+        setServerRepoName(effectiveRepo);
+        handleServerConnect(result, baseUrl, effectiveRepo);
+
+        try {
+          const allRepos = await fetchRepos(baseUrl);
+          setAvailableRepos(allRepos);
+        } catch (e) {
+          console.warn('Failed to fetch repo list:', e);
+        }
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') {
+          setViewMode('onboarding');
+          setProgress(null);
+          return;
+        }
+        console.error('Clone-analyze failed:', err);
+        const message = err instanceof Error ? err.message : '克隆或分析失败';
+        let detail = message;
+        if (message.includes('401') || message.includes('403') || message.includes('Authentication')) {
+          detail = token ? '鉴权失败，请检查令牌' : '该仓库需要鉴权，请填写访问令牌';
+        } else if (message.includes('404') || message.includes('not found')) {
+          detail = '仓库不存在或无权访问';
+        }
+        setProgress({
+          phase: 'error',
+          percent: 0,
+          message: '克隆或分析失败',
+          detail,
+        });
+        setTimeout(() => {
+          setViewMode('onboarding');
+          setProgress(null);
+        }, 3000);
+      } finally {
+        longOpAbortRef.current = null;
+        setLoadingAllowCancel(false);
+      }
+    },
+    [handleServerConnect, setViewMode, setProgress, setServerBaseUrl, setServerRepoName, setAvailableRepos]
+  );
 
   const handleZipUploadToServer = useCallback(
     async (file: File, proxyUrl: string) => {
@@ -211,6 +327,8 @@ const AppContent = () => {
 
       const baseUrl = normalizeServerUrl(proxyUrl);
       const aborter = new AbortController();
+      longOpAbortRef.current = aborter;
+      setLoadingAllowCancel(true);
 
       try {
         // 持久化：通过压缩包名称判断是否已上传，已上传则直接走 server 模式
@@ -284,7 +402,11 @@ const AppContent = () => {
           console.warn('Failed to fetch repo list:', e);
         }
       } catch (error) {
-        if ((error as Error).name === 'AbortError') return;
+        if ((error as Error).name === 'AbortError') {
+          setViewMode('onboarding');
+          setProgress(null);
+          return;
+        }
         console.error('ZIP upload to server failed:', error);
         setProgress({
           phase: 'error',
@@ -296,6 +418,9 @@ const AppContent = () => {
           setViewMode('onboarding');
           setProgress(null);
         }, 3000);
+      } finally {
+        longOpAbortRef.current = null;
+        setLoadingAllowCancel(false);
       }
     },
     [handleServerConnect, setViewMode, setProgress, setProjectName, setServerBaseUrl, setServerRepoName, setAvailableRepos]
@@ -375,7 +500,7 @@ const AppContent = () => {
     return (
       <DropZone
         onFileSelect={handleFileSelect}
-        onGitClone={handleGitClone}
+        onLocalGitSubmit={handleLocalGitSubmit}
         onZipUploadToServer={handleZipUploadToServer}
         onServerConnect={async (result, serverUrl) => {
           if (serverUrl) {
@@ -397,7 +522,12 @@ const AppContent = () => {
   }
 
   if (viewMode === 'loading' && progress) {
-    return <LoadingOverlay progress={progress} />;
+    return (
+      <LoadingOverlay
+        progress={progress}
+        onCancel={loadingAllowCancel ? handleLoadingCancel : undefined}
+      />
+    );
   }
 
   // Exploring view

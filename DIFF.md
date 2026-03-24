@@ -111,16 +111,24 @@
 2. **useSigma.ts - 图形可视化Hook增强，新增autoLayoutOnSetGraph选项控制布局，focusNode方法新增force参数和聚焦逻辑优化**
 3. **useBackend.ts - 默认URL从4747改为6660，与CLI服务端口保持一致**
 
-#### 十一、gitnexus-web/src/components
+#### 十一、gitnexus-web/src（App 与 components）
 
-**组件功能增强：**
+**应用壳与组件功能增强：**
 
-1. **DropZone.tsx - 文件上传和仓库连接组件增强，新增onZipUploadToServer prop和localgit tab，支持Local Git和ZIP Upload代理模式，新增状态管理（localGitUrl、localGitToken、localGitBranch、localGitProxyUrl、zipProxyUrl、serverRepoName等），进度状态增强支持文件数量，URL参数支持，新增handleZipFile和handleLocalGitClone函数，详细的进度阶段映射（中文），Server Tab增强新增serverRepoName输入框和说明文字**
-2. **GraphCanvas.tsx - 图形画布组件增强，节点点击聚焦增强，Ref暴露增强使用双重requestAnimationFrame延迟调用和force参数，聚焦选中节点增强**
-3. **QueryFAB.tsx - Cypher查询浮动按钮组件增强，查询保存功能（localStorage），内置查询从5个扩展到13个（中文标签），结果分页功能（50条/页），保存查询UI和查询列表UI改进，表格单元格超长内容悬停显示完整内容（title tooltip）**
-4. **RightPanel.tsx - 右侧面板组件增强，递归限制配置功能，错误处理改进（可关闭错误提示），LLM设置集成，状态栏布局改进**
-5. **SettingsPanel.tsx - 设置面板组件增强，模型搜索功能（SearchableModelCombobox），OpenAI和Ollama模型加载功能，OpenRouter模型选择改进，后端URL默认值从4747改为6660**
-6. **ToolCallCard.tsx - 工具结果预览上限 3000→6000 字符；提示仅页面截断、完整结果仍在上下文**
+1. **App.tsx - Local Git 的 `cloneAnalyzeOnServer` + `connectToServer` 逻辑上收至应用层；移除浏览器内 GitHub 克隆后的 WASM 流水线入口（原 `handleGitClone` / `runPipelineFromFiles`）；`handleZipUploadToServer` 与 Local Git 长任务共用 `longOpAbortRef` + `loadingAllowCancel`，向 `LoadingOverlay` 传入可选取消；ZIP/克隆任务 `AbortError` 时回到 onboarding 并清空进度；`handleServerConnect` 提前声明以满足 hooks 依赖顺序；`DropZone` 改为 `onLocalGitSubmit` 回调**
+2. **DropZone.tsx - 移除前台 GitHub 独立标签页及浏览器内克隆入口（开源/私有统一走 Local Git + serve）；保留 ZIP Upload / Git（Local Git）/ Server 三 Tab；Local Git 校验通过后调用 `onLocalGitSubmit` 交由 App 切换 `loading`；ZIP 填写代理后上传不再在组件内嵌进度页，与本地选 ZIP 相同由全屏 `LoadingOverlay` 展示；精简状态与 import（去掉组件内 clone-analyze 进度映射）；Server Tab 说明去掉「必须用 GitHub 标签克隆公开库」类表述**
+3. **LoadingOverlay.tsx - 新增可选 `onCancel`，在长任务（ZIP 上传、Local Git）期间显示「取消」并触发 `AbortController.abort`；`progress.phase === 'error'` 时不显示取消**
+4. **GraphCanvas.tsx - 图形画布组件增强，节点点击聚焦增强，Ref暴露增强使用双重requestAnimationFrame延迟调用和force参数，聚焦选中节点增强**
+5. **QueryFAB.tsx - Cypher查询浮动按钮组件增强，查询保存功能（localStorage），内置查询从5个扩展到13个（中文标签），结果分页功能（50条/页），保存查询UI和查询列表UI改进，表格单元格超长内容悬停显示完整内容（title tooltip）**
+6. **RightPanel.tsx - 右侧面板组件增强，递归限制配置功能，错误处理改进（可关闭错误提示），LLM设置集成，状态栏布局改进**
+7. **SettingsPanel.tsx - 设置面板组件增强，模型搜索功能（SearchableModelCombobox），OpenAI和Ollama模型加载功能，OpenRouter模型选择改进，后端URL默认值从4747改为6660**
+8. **ToolCallCard.tsx - 工具结果预览上限 3000→6000 字符；提示仅页面截断、完整结果仍在上下文**
+
+#### 十一点五、gitnexus-web/src/utils
+
+**进度与上游 API 对齐：**
+
+1. **clone-analyze-progress.ts（新增）- `getCloneAnalyzePhaseLabel`、`cloneAnalyzeProgressFromServer`：将服务端 clone-analyze SSE 阶段（含 `phase|filesProcessed|totalFiles`）映射为 `PipelineProgress`，使全屏加载页与本地 WASM 解析流水线展示风格一致**
 
 #### 十二、gitnexus-web/src/core
 

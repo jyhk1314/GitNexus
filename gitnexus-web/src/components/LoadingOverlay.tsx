@@ -1,10 +1,13 @@
+import { X } from 'lucide-react';
 import { PipelineProgress } from '../types/pipeline';
 
 interface LoadingOverlayProps {
   progress: PipelineProgress;
+  /** 长任务（ZIP 上传、Local Git clone-analyze）可取消时显示 */
+  onCancel?: () => void;
 }
 
-export const LoadingOverlay = ({ progress }: LoadingOverlayProps) => {
+export const LoadingOverlay = ({ progress, onCancel }: LoadingOverlayProps) => {
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center bg-void z-50">
       {/* Background gradient effects */}
@@ -60,6 +63,17 @@ export const LoadingOverlay = ({ progress }: LoadingOverlayProps) => {
       <p className="mt-4 font-mono text-3xl font-semibold text-text-primary">
         {progress.percent}%
       </p>
+
+      {onCancel && progress.phase !== 'error' && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mt-8 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium text-text-secondary bg-elevated border border-border-default hover:bg-elevated/80 hover:text-text-primary transition-colors"
+        >
+          <X className="w-4 h-4" />
+          取消
+        </button>
+      )}
     </div>
   );
 };
