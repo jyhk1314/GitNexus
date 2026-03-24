@@ -106,7 +106,7 @@ const batchInsertEmbeddings = async (
  */
 let vectorExtensionLoaded = false;
 
-const createVectorIndex = async (
+export const createVectorIndex = async (
   executeQuery: (cypher: string) => Promise<any[]>
 ): Promise<void> => {
   // LadybugDB v0.15+ requires explicit VECTOR extension loading (once per session)
@@ -314,7 +314,7 @@ export const semanticSearch = async (
   k: number = 10,
   maxDistance: number = 0.5
 ): Promise<SemanticSearchResult[]> => {
-  if (!isEmbedderReady()) {
+  if (!(await isEmbedderReady())) {
     throw new Error('Embedding model not initialized. Run embedding pipeline first.');
   }
 

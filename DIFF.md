@@ -26,12 +26,14 @@
 8. **api.ts - 错误处理和日志优化，更详细的错误处理、过滤噪音日志、完善流式响应错误处理**
 9. **api.ts - 路径处理工具函数，getCodeBaseDir、getCodeDir、getRepoNameFromUrl、pathEquals等跨平台路径处理**
 10. **mcp-http.ts - DELETE /api/mcp/sessions/:sessionId，手动清理 MCP session 接口，支持按 sessionId 关闭并移除会话，成功返回 204，不存在返回 404**
+11. **api.ts - 混合搜索分支使用 await isEmbedderReady()，与异步嵌入就绪检查对齐**
 
 #### 三、gitnexus/src/mcp/core
 
 **中文本地化支撑：**
 
 1. **embedder.ts - 强制写死hf镜像站**
+2. **lbug-adapter.ts - 连接创建时 await loadFTSExtension(conn)；initLbug 预建连接池逐连接加载 FTS；移除池化后集中 LOAD EXTENSION；导出异步 loadFTSExtension(conn)，已加载/已安装等幂等静默；createConnection 改为 async 供上述 await 使用**
 
 #### 四、gitnexus/src/cli
 
@@ -46,14 +48,14 @@
 
 **C++解析优化及核心模块增强：**
 
-1. **embeddings/embedder.ts - 中文本地化支撑，添加Hugging Face镜像站配置（hf-mirror.com），避免直连慢或不可用**
+1. **embeddings/embedder.ts - 中文本地化支撑，添加Hugging Face镜像站配置（hf-mirror.com），避免直连慢或不可用；isEmbedderReady 改为 async，内部 initEmbedder 与 createVectorIndex 后再返回是否就绪（每次 semanticSearch 会 await，依赖底层幂等；若延迟敏感可后续做就绪缓存）**
 2. **ingestion/community-processor.ts - 社区检测优化，扩展通用目录过滤列表，新增app和helper目录名**
 3. **ingestion/constants.ts - Tree-sitter缓冲区大小优化，从512KB提升到2MB，避免跳过较大文件**
 4. **ingestion/filesystem-walker.ts - 文件大小限制优化，从512KB提升到2MB**
-5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能**
+5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能；queryFTS/createFTSIndex 路径 ensure loadFTSExtension()，模块级 ftsLoaded 幂等**
 6. **ingestion/parsing-processor.ts - 进度优化, 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：将enclosingClassId计算移至nodeId生成之前，有enclosingClassId时用其替代filePath作为scope key，使.h声明和.cpp定义合并为同一图节点；C++ Function节点有所属类时label提升为Method；C++ class/struct节点使用不含filePath的id；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
 7. **ingestion/pipeline.ts - 进度优化**
-8. **lbug/csv-generator.ts - 文件截断大小优化**
+8. **lbug/csv-generator.ts - 文件截断大小优化；FileContentCache 默认 maxSize=3000 及最大缓存节点数注释**
 9. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; C++ CPP_QUERIES补全类内方法声明捕获：修复field_declaration规则中identifier→field_identifier/operator_name，新增pointer_declarator包裹的返回指针方法规则，新增类内析构函数declaration规则**
 10. **ingestion/workers/parse-worker.ts - 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：enclosingClassId提前计算，nodeId scope改为class-scoped；effectiveLabel机制（Function→Method提升）；findEnclosingFunctionId同步使用class-scoped id；C++ class/struct使用不含filePath的nodeId；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
 11. **ingestion/utils.ts - C++ HAS_METHOD关系完整性修复：findEnclosingClassId新增qualified_identifier处理，从out-of-line方法定义（ClassName::method）的scope提取类名，返回不含filePath的classId；类内方法的classId也改为不含filePath，使.h和.cpp两侧id一致**
@@ -61,6 +63,9 @@
 13. **ingestion/cpp-export-macro-preprocess.ts - 新增文件，C++解析前strip导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT），解决tree-sitter-cpp无法解析class MACRO Type的问题，preprocessCppExportMacros供parse-worker、parsing-processor、call-processor、heritage-processor、import-processor调用**
 14. **ingestion/heritage-processor.ts - C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
 15. **ingestion/import-processor.ts - C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
+16. **embeddings/embedding-pipeline.ts - 导出 createVectorIndex；semanticSearch 入口 await isEmbedderReady()**
+17. **embeddings/types.ts - maxSnippetLength 配置项注释（片段长度与算力权衡）**
+18. **search/hybrid-search.ts - mergeWithRRF：同一路径已写入语义元数据时，后续语义命中只累加 RRF 分，不覆盖 semanticScore、nodeId、行号等**
 
 #### 六、gitnexus-web/src/lib
 
@@ -83,6 +88,7 @@
 2. **ingestion.worker.ts - HTTP API路径调整，去掉/api前缀（/query、/search），与后端服务路由保持一致**
 3. **ingestion.worker.ts - runPipeline和runPipelineFromFiles方法增强，新增lbugReady状态跟踪，添加错误日志输出，返回时传递数据库加载状态**
 4. **ingestion.worker.ts - chatStream方法增强，新增recursionLimit参数支持，实现优先级：参数 > 用户设置 > 默认值100**
+5. **ingestion.worker.ts - normalizeBackendBaseUrl 规范化粘贴型后端 URL；HTTP /search 解析 body.results 数组（非数组时按空数组），映射 sources、score、rank、bm25Score、semanticScore 等**
 
 #### 九、gitnexus-web/src/services
 
@@ -114,6 +120,7 @@
 3. **QueryFAB.tsx - Cypher查询浮动按钮组件增强，查询保存功能（localStorage），内置查询从5个扩展到13个（中文标签），结果分页功能（50条/页），保存查询UI和查询列表UI改进，表格单元格超长内容悬停显示完整内容（title tooltip）**
 4. **RightPanel.tsx - 右侧面板组件增强，递归限制配置功能，错误处理改进（可关闭错误提示），LLM设置集成，状态栏布局改进**
 5. **SettingsPanel.tsx - 设置面板组件增强，模型搜索功能（SearchableModelCombobox），OpenAI和Ollama模型加载功能，OpenRouter模型选择改进，后端URL默认值从4747改为6660**
+6. **ToolCallCard.tsx - 工具结果预览上限 3000→6000 字符；提示仅页面截断、完整结果仍在上下文**
 
 #### 十二、gitnexus-web/src/core
 
@@ -125,7 +132,7 @@
 4. **ingestion/utils.ts - C++场景适配关联.h及.c文件; findEnclosingClassId新增qualified_identifier处理，类内classId改为不含filePath**
 5. **llm/agent.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 过滤空内容, 并支持递归次数配置**
 6. **llm/settings-service.ts - 支持模型列表自检索**
-7. **llm/tools.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 增强read工具对路径依赖的限制**
+7. **llm/tools.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 增强read工具对路径依赖的限制；read 工具 MAX_CONTENT 50,000→200,000；Cypher 使用 labels(n) 与 ORDER BY 列别名；explore/context 按节点类型安全构造 MATCH（反引号转义标签名）或 MATCH (n {id})；labels() 返回数组时成员列表 formatLabelsForDisplay 与 normalizeNodeType 解析（多标签节点 MATCH 仍取首个合法标签，属折中）**
 8. **llm/types.ts - 大模型递归次数限制可配置**
 9. **lbug/csv-generator.ts - 文件截断大小优化**
 10. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; CPP_QUERIES补全类内方法声明捕获规则（field_identifier、pointer_declarator、析构函数declaration）**

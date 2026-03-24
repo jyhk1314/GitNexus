@@ -789,7 +789,7 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
 
       const results = await withLbugDb(lbugPath, async () => {
         const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
-        if (isEmbedderReady()) {
+        if (await isEmbedderReady()) {
           const { semanticSearch } = await import('../core/embeddings/embedding-pipeline.js');
           return hybridSearch(query, limit, executeQuery, semanticSearch);
         }

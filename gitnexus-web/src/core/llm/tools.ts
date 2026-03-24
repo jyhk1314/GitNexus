@@ -514,7 +514,7 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
       }
       
       // Truncate large files
-      const MAX_CONTENT = 50000;
+      const MAX_CONTENT = 200000;
       if (content.length > MAX_CONTENT) {
         const lines = content.split('\n').length;
         return `File: ${actualPath} (${lines} lines, truncated)\n\n${content.slice(0, MAX_CONTENT)}\n\n... [truncated]`;
@@ -647,6 +647,12 @@ If you don't know the exact file path, use search() or grep() first to find file
       let symbolRow: any | null = null;
       
       const getRowValue = (row: any, idx: number, key: string) => Array.isArray(row) ? row[idx] : row[key];
+
+      const formatLabelsForDisplay = (v: unknown): string => {
+        if (typeof v === 'string') return v;
+        if (Array.isArray(v)) return v.filter(x => typeof x === 'string').join(', ');
+        return '';
+      };
       
       if (!resolvedType || resolvedType === 'process') {
         const processQuery = `
@@ -680,7 +686,7 @@ If you don't know the exact file path, use search() or grep() first to find file
         const symbolQuery = `
           MATCH (n)
           WHERE n.name = '${safeTarget}' OR n.id = '${safeTarget}' OR n.filePath = '${safeTarget}'
-          RETURN n.id AS id, n.name AS name, n.filePath AS filePath, label(n) AS nodeType
+          RETURN n.id AS id, n.name AS name, n.filePath AS filePath, labels(n) AS nodeType
           LIMIT 5
         `;
         const symbolRes = await executeQuery(symbolQuery);
@@ -753,14 +759,14 @@ If you don't know the exact file path, use search() or grep() first to find file
         
         const membersQuery = `
           MATCH (c:Community {id: '${cid.replace(/'/g, "''")}'})<-[:CodeRelation {type: 'MEMBER_OF'}]-(m)
-          RETURN m.name AS name, m.filePath AS filePath, label(m) AS nodeType
+          RETURN m.name AS name, m.filePath AS filePath, labels(m) AS nodeType
           LIMIT 50
         `;
         const processesQuery = `
           MATCH (c:Community {id: '${cid.replace(/'/g, "''")}'})<-[:CodeRelation {type: 'MEMBER_OF'}]-(s)
           MATCH (s)-[:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process)
           RETURN DISTINCT p.id AS id, p.label AS label, p.stepCount AS stepCount
-          ORDER BY p.stepCount DESC
+          ORDER BY stepCount DESC
           LIMIT 20
         `;
         
@@ -772,7 +778,8 @@ If you don't know the exact file path, use search() or grep() first to find file
         const memberLines = members.map((row: any) => {
           const name = getRowValue(row, 0, 'name');
           const filePath = getRowValue(row, 1, 'filePath');
-          const nodeType = getRowValue(row, 2, 'nodeType');
+          const rawType = getRowValue(row, 2, 'nodeType');
+          const nodeType = formatLabelsForDisplay(rawType) || 'Symbol';
           return `- ${nodeType}: ${name} (${filePath || 'n/a'})`;
         });
         
@@ -800,22 +807,43 @@ If you don't know the exact file path, use search() or grep() first to find file
         const nodeId = getRowValue(symbolRow, 0, 'id');
         const name = getRowValue(symbolRow, 1, 'name');
         const filePath = getRowValue(symbolRow, 2, 'filePath');
-        const nodeType = getRowValue(symbolRow, 3, 'nodeType');
-        
+
+        const normalizeNodeType = (v: unknown): string => {
+          if (typeof v === 'string') {
+            return /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? v : '';
+          }
+          if (Array.isArray(v)) {
+            for (const x of v) {
+              const one = normalizeNodeType(x);
+              if (one) return one;
+            }
+          }
+          return '';
+        };
+
+        const nodeTypeFromRow = normalizeNodeType(getRowValue(symbolRow, 3, 'nodeType'));
+        const nodeTypeFromId = normalizeNodeType(String(nodeId ?? '').split(':')[0]);
+        const nodeType = nodeTypeFromRow || nodeTypeFromId;
+        const safeNodeId = String(nodeId).replace(/'/g, "''");
+
+        const matchNode = nodeType
+          ? `MATCH (n:\`${nodeType}\` {id: '${safeNodeId}'})`
+          : `MATCH (n {id: '${safeNodeId}'})`;
+
         const clusterQuery = `
-          MATCH (n:${nodeType} {id: '${String(nodeId).replace(/'/g, "''")}'})
+          ${matchNode}
           MATCH (n)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
           RETURN c.label AS label, c.description AS description
           LIMIT 1
         `;
         const processQuery = `
-          MATCH (n:${nodeType} {id: '${String(nodeId).replace(/'/g, "''")}'})
+          ${matchNode}
           MATCH (n)-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process)
           RETURN p.label AS label, r.step AS step, p.stepCount AS stepCount
           ORDER BY r.step
         `;
         const connectionsQuery = `
-          MATCH (n:${nodeType} {id: '${String(nodeId).replace(/'/g, "''")}'})
+          ${matchNode}
           OPTIONAL MATCH (n)-[r1:CodeRelation]->(dst)
           OPTIONAL MATCH (src)-[r2:CodeRelation]->(n)
           RETURN 

@@ -150,8 +150,8 @@ export const ToolCallCard = ({ toolCall, defaultExpanded = false }: ToolCallCard
               </div>
               <div className="max-h-[400px] overflow-y-auto bg-surface/50 rounded">
                 <pre className="text-xs text-text-secondary p-2 whitespace-pre-wrap font-mono">
-                  {toolCall.result.length > 3000
-                    ? toolCall.result.slice(0, 3000) + '\n\n... (truncated)'
+                  {toolCall.result.length > 6000
+                    ? toolCall.result.slice(0, 6000) + '\n\n... (page truncated only, full result is available in the context)'
                     : toolCall.result
                   }
                 </pre>

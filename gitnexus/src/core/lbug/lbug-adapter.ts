@@ -766,6 +766,9 @@ export const queryFTS = async (
     throw new Error('LadybugDB not initialized. Call initLbug first.');
   }
 
+  // Load FTS extension if not already loaded
+  await loadFTSExtension();
+
   // Escape backslashes and single quotes to prevent Cypher injection
   const escapedQuery = query.replace(/\\/g, '\\\\').replace(/'/g, "''");
 

@@ -62,6 +62,7 @@ export interface EmbeddingConfig {
   /** Device to use for inference: 'auto' tries GPU first (DirectML on Windows, CUDA on Linux), falls back to CPU */
   device: 'auto' | 'dml' | 'cuda' | 'cpu' | 'wasm';
   /** Maximum characters of code snippet to include */
+  // maxSnippetLength 决定 embedding 时喂给模型的代码片段长度上限；值越大，信息更多但计算更重。
   maxSnippetLength: number;
 }
 

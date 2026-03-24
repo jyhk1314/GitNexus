@@ -43,6 +43,7 @@ export interface HybridSearchResult {
  * @param limit - Maximum results to return
  * @returns Merged and re-ranked results
  */
+// add note by jyhk at 2026-03-24: 基于外部的评分排序+检索频率, 来决定最后的关联评分, 外面的排序越靠前, 检索到频率越多, 得分就越高
 export const mergeWithRRF = (
   bm25Results: BM25SearchResult[],
   semanticResults: SemanticSearchResult[],
@@ -73,15 +74,20 @@ export const mergeWithRRF = (
     if (existing) {
       // Found by both methods - add scores
       existing.score += rrfScore;
-      existing.sources.push('semantic');
-      existing.semanticScore = 1 - r.distance;
-      
-      // Add semantic metadata
-      existing.nodeId = r.nodeId;
-      existing.name = r.name;
-      existing.label = r.label;
-      existing.startLine = r.startLine;
-      existing.endLine = r.endLine;
+      if (existing.sources.includes('semantic')) {
+        // mdy by jyhk at 2026-03-24, reason: 取得分最高的结果反馈, 避免得分低的覆盖得分高的
+        existing.sources.push('semantic');
+      } else {
+        existing.sources.push('semantic');
+        existing.semanticScore = 1 - r.distance;
+        
+        // Add semantic metadata
+        existing.nodeId = r.nodeId;
+        existing.name = r.name;
+        existing.label = r.label;
+        existing.startLine = r.startLine;
+        existing.endLine = r.endLine;
+      }
     } else {
       // Only found by semantic
       merged.set(r.filePath, {

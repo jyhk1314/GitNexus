@@ -65,7 +65,9 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
    建索引 / 写入图库时，为控制存储与展示体积会对以下内容做截断，超出部分替换为 `... [truncated]`：
    - **整文件内容**（File 节点）：超过 **200,000 字符**（约 5000 行）时，只保留前 200,000 字符。
    - **单符号代码片段**（函数/类等节点详情）：超过 **60,000 字符**（约 1500 行）时，只保留前 60,000 字符。  
-   Wiki 生成时，单模块源码总 token 超过 **30,000**（默认）会对模块源码做截断，并注明 `(source truncated for context window limits)`。
+   Wiki 生成时，单模块源码总 token 超过 **30,000**（默认）会对模块源码做截断，并注明 `(source truncated for context window limits)`。  
+   **Web UI（LLM 工具读文件）**：`read_file` 等工具单文件内容上限与 File 节点一致，为 **200,000** 字符。  
+   **Web UI（工具调用卡片）**：单条工具返回文本在卡片中仅预览前 **6,000** 字符（完整内容仍保留在对话上下文中）；详见 `docs/GIT_WORKTREE_CHANGES_2026-03-24.md`。
 
 4. **嵌入模型（语义/向量搜索）**  
    - **模型**：**Snowflake/snowflake-arctic-embed-xs**（约 22M 参数，384 维，~90MB）。  
@@ -74,6 +76,12 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
      - **Web 前端（ZIP/公网 GitHub 等）**：浏览器会从**当前页面同源**的 `/hf-mirror/` 请求模型文件，以避免直连 hf-mirror.com 时的 CORS 限制。开发时 Vite 已配置将该路径代理到 **https://hf-mirror.com**；**生产环境**若自建 Web 服务（如 nginx）托管前端，需同样将 `/hf-mirror` 反向代理到 `https://hf-mirror.com`，否则会报 CORS 且无法加载模型。  
      - **Node 端 / MCP**：直连 **https://hf-mirror.com**，无需代理。  
    - **配置位置**：Web/Node 默认在 `core/embeddings/types.ts` 的 `DEFAULT_EMBEDDING_CONFIG.modelId`；MCP 在 `mcp/core/embedder.ts` 的 `MODEL_ID`。
+
+---
+
+## 变更记录（工作区）
+
+- 近期未提交改动的方案与文件级说明见：**[GIT_WORKTREE_CHANGES_2026-03-24.md](./GIT_WORKTREE_CHANGES_2026-03-24.md)**（检索、FTS、嵌入就绪、Web Worker 与 LLM 工具等）。
 
 ---
 

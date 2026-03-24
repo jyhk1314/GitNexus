@@ -72,6 +72,7 @@ class FileContentCache {
   private maxSize: number;
   private repoPath: string;
 
+  // add note by jyhk at 2026-03-24, reason: 支持最大缓存节点个数3000
   constructor(repoPath: string, maxSize: number = 3000) {
     this.repoPath = repoPath;
     this.maxSize = maxSize;

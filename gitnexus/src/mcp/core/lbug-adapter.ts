@@ -131,10 +131,12 @@ function restoreStdout(): void {
   }
 }
 
-function createConnection(db: lbug.Database): lbug.Connection {
+async function createConnection(db: lbug.Database): Promise<lbug.Connection> {
   silenceStdout();
   try {
-    return new lbug.Connection(db);
+    const conn = new lbug.Connection(db);
+    await loadFTSExtension(conn);
+    return conn;
   } finally {
     restoreStdout();
   }
@@ -213,21 +215,11 @@ export const initLbug = async (repoId: string, dbPath: string): Promise<void> =>
   // Pre-create a small pool of connections
   const available: lbug.Connection[] = [];
   for (let i = 0; i < INITIAL_CONNS_PER_REPO; i++) {
-    available.push(createConnection(db));
+    available.push(await createConnection(db));
   }
 
   pool.set(repoId, { db, available, checkedOut: 0, waiters: [], lastUsed: Date.now(), dbPath });
   ensureIdleTimer();
-
-  // Load FTS extension once per shared Database
-  if (!shared.ftsLoaded) {
-    try {
-      await available[0].query('LOAD EXTENSION fts');
-      shared.ftsLoaded = true;
-    } catch {
-      // Extension may not be installed — FTS queries will fail gracefully
-    }
-  }
 };
 
 /**
@@ -246,7 +238,7 @@ function checkout(entry: PoolEntry): Promise<lbug.Connection> {
   const totalConns = entry.available.length + entry.checkedOut;
   if (totalConns < MAX_CONNS_PER_REPO) {
     entry.checkedOut++;
-    return Promise.resolve(createConnection(entry.db));
+    return createConnection(entry.db);
   }
 
   // At capacity — queue the caller with a timeout.
@@ -279,6 +271,22 @@ function checkin(entry: PoolEntry, conn: lbug.Connection): void {
     entry.available.push(conn);
   }
 }
+
+export const loadFTSExtension = async (conn: lbug.Connection): Promise<void> => {
+  if (!conn) {
+    throw new Error('LadybugDB not initialized. Call initLbug first.');
+  }
+  try {
+    await conn.query('INSTALL fts');
+    await conn.query('LOAD EXTENSION fts');
+  } catch (err: any) {
+    const msg = err?.message || '';
+    if (msg.includes('already loaded') || msg.includes('already installed') || msg.includes('already exists')) {
+    } else {
+      console.error('GitNexus: FTS extension load failed:', msg);
+    }
+  }
+};
 
 /**
  * Execute a query on a specific repo's connection pool.

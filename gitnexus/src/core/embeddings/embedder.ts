@@ -196,7 +196,11 @@ export const initEmbedder = async (
 /**
  * Check if the embedder is initialized and ready
  */
-export const isEmbedderReady = (): boolean => {
+export const isEmbedderReady = async (): Promise<boolean> => {
+  const { createVectorIndex } = await import('./embedding-pipeline.js');
+  const { executeQuery } = await import('../lbug/lbug-adapter.js');
+  await initEmbedder();
+  await createVectorIndex(executeQuery);
   return embedderInstance !== null;
 };
 

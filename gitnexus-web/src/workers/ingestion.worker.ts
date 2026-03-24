@@ -73,9 +73,21 @@ const httpFetchWithTimeout = async (
   }
 };
 
+const normalizeBackendBaseUrl = (input: string): string => {
+  let url = (input ?? '').trim();
+  url = url.replace(/^`+/, '').replace(/`+$/, '').trim();
+  url = url.replace(/^"+/, '').replace(/"+$/, '').trim();
+  url = url.replace(/^'+/, '').replace(/'+$/, '').trim();
+  url = url.replace(/\s+/g, '');
+  url = url.replace(/\/+$/, '');
+  return url;
+};
+
 const createHttpExecuteQuery = (backendUrl: string, repo: string) => {
   return async (cypher: string): Promise<any[]> => {
-    const response = await httpFetchWithTimeout(`${backendUrl}/query`, {
+    const baseUrl = normalizeBackendBaseUrl(backendUrl);
+    const url = `${baseUrl}/query`;
+    const response = await httpFetchWithTimeout(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cypher, repo }),
@@ -98,7 +110,9 @@ const createHttpExecuteQuery = (backendUrl: string, repo: string) => {
 const createHttpHybridSearch = (backendUrl: string, repo: string) => {
   return async (query: string, k: number = 15): Promise<any[]> => {
     try {
-      const response = await httpFetchWithTimeout(`${backendUrl}/search`, {
+      const baseUrl = normalizeBackendBaseUrl(backendUrl);
+      const url = `${baseUrl}/search`;
+      const response = await httpFetchWithTimeout(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, limit: k, repo }),
@@ -107,33 +121,61 @@ const createHttpHybridSearch = (backendUrl: string, repo: string) => {
         return [];
       }
       const body = await response.json();
-      const data = body.results ?? body;
+      const raw = Array.isArray(body.results) ? body.results : [];
+      const mapped = raw.map((r: any, i: number) => {
+        const filePath = r?.filePath;
+  
+        const nodeId = r?.nodeId ?? r?.id ?? '';
+        const name = r?.name ?? (filePath ? String(filePath).split('/').pop() : 'Unknown');
+        const label = r?.label ?? r?.type ?? 'File';
+        const sources = Array.isArray(r?.sources)
+          ? r.sources
+          : (typeof r?.sources === 'string' ? [r.sources] : []);
+        const score = typeof r?.score === 'number'
+          ? r.score
+          : (typeof r?.bm25Score === 'number' ? r.bm25Score : (1 - (i * 0.02)));
 
-      // Flatten process_symbols + definitions into a single ranked list
-      const symbols: any[] = (data.process_symbols ?? []).map((s: any, i: number) => ({
-        nodeId: s.id,
-        id: s.id,
-        name: s.name,
-        label: s.type,
-        filePath: s.filePath,
-        startLine: s.startLine,
-        endLine: s.endLine,
-        content: s.content ?? '',
-        sources: ['bm25', 'semantic'],
-        score: 1 - (i * 0.02),
-      }));
-
-      const defs: any[] = (data.definitions ?? []).map((d: any, i: number) => ({
-        id: d.name,
-        name: d.name,
-        label: d.type || 'File',
-        filePath: d.filePath,
-        content: '',
-        sources: ['bm25'],
-        score: 0.5 - (i * 0.02),
-      }));
-
-      return [...symbols, ...defs].slice(0, k);
+        if (sources.includes('bm25') && sources.includes('semantic')) {
+          return {
+            filePath: r.filePath,
+            score: r.score,
+            rank: r.rank,
+            sources: r.sources,
+            bm25Score: r.bm25Score,
+            semanticScore: r.semanticScore,
+            nodeId: r.nodeId,
+            name: r.name,
+            label: r.label,
+            startLine: r.startLine,
+            endLine: r.endLine,
+          };
+        }
+        else if (sources.includes('semantic')) {
+          return {
+            filePath: r.filePath,
+            score: r.score,
+            rank: r.rank,
+            sources: r.sources,
+            semanticScore: r.semanticScore,
+            nodeId: r.nodeId,
+            name: r.name,
+            label: r.label,
+            startLine: r.startLine,
+            endLine: r.endLine,
+          };
+        }
+        else {
+          return {
+            filePath: r.filePath,
+            score: r.score,
+            rank: r.rank,
+            sources: r.sources,
+            bm25Score: r.bm25Score,
+          };
+        }
+      }).filter((r: any) => !!r.filePath).slice(0, k);
+      
+      return mapped;
     } catch {
       return [];
     }
