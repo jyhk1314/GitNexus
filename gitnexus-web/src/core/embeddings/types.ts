@@ -75,7 +75,7 @@ export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
   batchSize: 16,
   dimensions: 384,
   device: 'webgpu', // WebGPU preferred, WASM fallback available if user chooses
-  maxSnippetLength: 500,
+  maxSnippetLength: 1500,
 };
 
 /**
