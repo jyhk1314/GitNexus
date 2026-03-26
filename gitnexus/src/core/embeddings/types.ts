@@ -76,7 +76,7 @@ export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
   batchSize: 16,
   dimensions: 384,
   device: 'auto',
-  maxSnippetLength: 1500,
+  maxSnippetLength: 3000,
 };
 
 /**
