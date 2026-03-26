@@ -68,7 +68,7 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
    Wiki 生成时，单模块源码总 token 超过 **30,000**（默认）会对模块源码做截断，并注明 `(source truncated for context window limits)`。  
    **Web UI（LLM 工具读文件）**：`read_file` 等工具单文件内容上限与 File 节点一致，为 **200,000** 字符。  
    **Web UI（工具调用卡片）**：单条工具返回文本在卡片中仅预览前 **6,000** 字符（完整内容仍保留在对话上下文中）；详见 `docs/GIT_WORKTREE_CHANGES_2026-03-24.md`。
-   **maxSnippetLength**: 向量化大小设置到1500
+   **maxSnippetLength**: 向量化大小设置到3000，文本的通过generateFileText来进行从1500截断
 
 4. **嵌入模型（语义/向量搜索）**  
    - **模型**：**Snowflake/snowflake-arctic-embed-xs**（约 22M 参数，384 维，~90MB）。  

@@ -181,7 +181,7 @@ const generateFileText = (
   if (node.content) {
     const cleanedContent = cleanContent(node.content);
     // For files, use a shorter snippet since they can be very long
-    const snippet = truncateContent(cleanedContent, Math.min(maxSnippetLength, 300));
+    const snippet = truncateContent(cleanedContent, Math.min(maxSnippetLength, 1500));
     parts.push('', snippet);
   }
 
