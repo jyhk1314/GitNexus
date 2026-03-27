@@ -92,7 +92,7 @@ const extractContent = (
   
   // For File nodes, return content (limited)
   if (node.label === 'File') {
-    const MAX_FILE_CONTENT = 200000;
+    const MAX_FILE_CONTENT = 600000;
     if (content.length > MAX_FILE_CONTENT) {
       return content.slice(0, MAX_FILE_CONTENT) + '\n... [truncated]';
     }

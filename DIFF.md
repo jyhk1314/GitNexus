@@ -53,12 +53,12 @@
 3. **ingestion/constants.ts - Tree-sitter缓冲区大小优化，从512KB提升到2MB，避免跳过较大文件**
 4. **ingestion/filesystem-walker.ts - 文件大小限制优化，从512KB提升到2MB**
 5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能；queryFTS/createFTSIndex 路径 ensure loadFTSExtension()，模块级 ftsLoaded 幂等**
-6. **ingestion/parsing-processor.ts - 进度优化, 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：将enclosingClassId计算移至nodeId生成之前，有enclosingClassId时用其替代filePath作为scope key，使.h声明和.cpp定义合并为同一图节点；C++ Function节点有所属类时label提升为Method；C++ class/struct节点使用不含filePath的id；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
+6. **ingestion/parsing-processor.ts - 进度优化, 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：将enclosingClassId计算移至nodeId生成之前，有enclosingClassId时用其替代filePath作为scope key，使.h声明和.cpp定义合并为同一图节点；类作用域 Method/Constructor 的 nodeId 在 `scope:name` 后追加 `#` + `hashCppCallableOverloadSegment`（仅各形参 type 子树指纹，SHA256 截断 12 位），区分重载且头/源默认实参声明与定义仍可 id 一致；C++ Function节点有所属类时label提升为Method；C++ class/struct节点使用不含filePath的id；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
 7. **ingestion/pipeline.ts - 进度优化**
-8. **lbug/csv-generator.ts - 文件截断大小优化；FileContentCache 默认 maxSize=3000 及最大缓存节点数注释**
-9. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; C++ CPP_QUERIES补全类内方法声明捕获：修复field_declaration规则中identifier→field_identifier/operator_name，新增pointer_declarator包裹的返回指针方法规则，新增类内析构函数declaration规则**
-10. **ingestion/workers/parse-worker.ts - 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：enclosingClassId提前计算，nodeId scope改为class-scoped；effectiveLabel机制（Function→Method提升）；findEnclosingFunctionId同步使用class-scoped id；C++ class/struct使用不含filePath的nodeId；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
-11. **ingestion/utils.ts - C++ HAS_METHOD关系完整性修复：findEnclosingClassId新增qualified_identifier处理，从out-of-line方法定义（ClassName::method）的scope提取类名，返回不含filePath的classId；类内方法的classId也改为不含filePath，使.h和.cpp两侧id一致**
+8. **lbug/csv-generator.ts - 文件截断大小优化；FileContentCache 默认 maxSize=3000 及最大缓存节点数注释；File 节点导出内容上限 MAX_FILE_CONTENT 200000→600000**
+9. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; C++ CPP_QUERIES补全类内方法声明捕获：修复field_declaration规则中identifier→field_identifier/operator_name，新增pointer_declarator包裹的返回指针方法规则，新增类内析构函数declaration规则；field_declaration_list 内补全「指针/双重指针/引用返回且带函数体」的内联成员 function_definition 捕获（与文件域模式对齐）**
+10. **ingestion/workers/parse-worker.ts - 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：enclosingClassId提前计算，nodeId scope改为class-scoped；类作用域 Method/Constructor 同步追加 `#` + `hashCppCallableOverloadSegment` 重载段（与 parsing-processor 一致）；effectiveLabel机制（Function→Method提升）；findEnclosingFunctionId同步使用class-scoped id；C++ class/struct使用不含filePath的nodeId；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
+11. **ingestion/utils.ts - C++ HAS_METHOD关系完整性修复：findEnclosingClassId新增qualified_identifier处理，从out-of-line方法定义（ClassName::method）的scope提取类名，返回不含filePath的classId；类内方法的classId也改为不含filePath，使.h和.cpp两侧id一致；新增 `hashCppCallableOverloadSegment` / `cppParameterListFingerprint`：仅拼接各形参 `type` 子树文本（规范化空白），忽略形参名与默认实参，兼容 `parameter_declaration` 与 `optional_parameter_declaration`，供类作用域 Method/Constructor 的 nodeId 重载消歧**
 12. **ingestion/call-processor.ts - C++ HAS_METHOD关系完整性修复：Laravel路由猜测的guessedId改为用controller的nodeId（classId）作为scope，与class-scoped nodeId方案保持一致；C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
 13. **ingestion/cpp-export-macro-preprocess.ts - 新增文件，C++解析前strip导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT），解决tree-sitter-cpp无法解析class MACRO Type的问题，preprocessCppExportMacros供parse-worker、parsing-processor、call-processor、heritage-processor、import-processor调用**
 14. **ingestion/heritage-processor.ts - C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
@@ -66,9 +66,16 @@
 16. **embeddings/embedding-pipeline.ts - 导出 createVectorIndex；semanticSearch 入口 await isEmbedderReady()**
 17. **embeddings/types.ts - maxSnippetLength 配置项注释（片段长度与算力权衡）**
 18. **search/hybrid-search.ts - mergeWithRRF：同一路径已写入语义元数据时，后续语义命中只累加 RRF 分，不覆盖 semanticScore、nodeId、行号等**
-19. **graph/graph.ts - C++ Method/Constructor 同 id 合并策略优化：后写入若来自 `.cpp`/`.cc`/`.cxx` 且 `language=cpp`，则覆盖图中已有节点（使 `filePath`/行号等优先反映实现文件）；`nodeId` 不变，`HAS_METHOD` 仍指向同一方法节点；非 C++ 或其它标签仍为「先写入者优先」**
+19. **graph/graph.ts - C++ Method/Constructor 同 id 合并策略优化：后写入若来自 `.cpp`/`.cc`/`.cxx` 且 `language=cpp`，则覆盖图中已有节点（含早前 `.h` 或另一 `.cpp`）；重载在解析层通过参数类型指纹区分 id；`nodeId` 不变时 `HAS_METHOD` 仍指向同一方法节点；非 C++ 或其它标签仍为「先写入者优先」**
 20. **ingestion/pipeline.ts - 解析顺序可观测：满足 `GITNEXUS_LOG_PARSE_ORDER` 或与 clone-analyze 一致的 `GITNEXUS_PROGRESS` 时，写入 `<repo>/.gitnexus/parse-order.log`（含 chunk 范围注释）；`GITNEXUS_LOG_PARSE_ORDER=0` 可显式关闭；stderr 输出绝对路径便于 serve/clone-analyze 排查**
-21. **test/unit/graph.test.ts - 覆盖 C++ 实现文件覆盖声明侧节点及 `.cc`/`.cxx` 后缀行为**
+21. **test/unit/graph.test.ts - 覆盖 C++ 实现文件覆盖声明侧节点、`.cc`/`.cxx` 后缀，及「两个 `.cpp` 同 id 时后者覆盖」**
+22. **ingestion/symbol-table.ts - 同文件同名支持多条定义（重载）：fileIndex 改为 `SymbolName → SymbolDefinition[]`；新增 `lookupExactAllFull`；`add` 同 `nodeId` 时替换条目；`lookupExact` / `lookupExactFull` 返回列表首条以兼容原语义；globalIndex 按 `nodeId` 去重更新**
+23. **ingestion/resolution-context.ts - 同文件权威层（Tier 1）改用 `lookupExactAllFull`，候选返回该文件内同名全部定义，支撑重载解析**
+24. **docs/CXX_METHOD_MERGE_AND_PARSE_ORDER.md - 设计与实现对齐说明：nodeId 含参数类型指纹、`.cpp` 后写入覆盖规则、HAS_METHOD 重载多条、`CALLS` 与 `lookupExactAllFull` 关系、单测/集成测索引**
+25. **test/unit/method-signature.test.ts - `hashCppCallableOverloadSegment`：重载分段不同、空参稳定、默认实参声明与无默认定义指纹一致、类内 `optional_parameter` 与类外 `function_definition` 一致**
+26. **test/integration/tree-sitter-languages.test.ts - 类内指针/双重指针/引用返回且带函数体的成员方法捕获**
+27. **test/unit/symbol-table.test.ts - 同文件同名多 overload 保留与 `lookupExactAllFull` 长度断言**
+28. **test/unit/type-env.test.ts - Mock SymbolTable 补充 `lookupExactAllFull`**
 
 #### 六、gitnexus-web/src/lib
 
@@ -143,9 +150,9 @@
 4. **ingestion/utils.ts - C++场景适配关联.h及.c文件; findEnclosingClassId新增qualified_identifier处理，类内classId改为不含filePath**
 5. **llm/agent.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 过滤空内容, 并支持递归次数配置**
 6. **llm/settings-service.ts - 支持模型列表自检索**
-7. **llm/tools.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 增强read工具对路径依赖的限制；read 工具 MAX_CONTENT 50,000→200,000；Cypher 使用 labels(n) 与 ORDER BY 列别名；explore/context 按节点类型安全构造 MATCH（反引号转义标签名）或 MATCH (n {id})；labels() 返回数组时成员列表 formatLabelsForDisplay 与 normalizeNodeType 解析（多标签节点 MATCH 仍取首个合法标签，属折中）**
+7. **llm/tools.ts - 模型检索增强, 暴露schema数据解构避免检索出错, 增强read工具对路径依赖的限制；read 工具 MAX_CONTENT 50,000→200,000→600,000；Cypher 使用 labels(n) 与 ORDER BY 列别名；explore/context 按节点类型安全构造 MATCH（反引号转义标签名）或 MATCH (n {id})；labels() 返回数组时成员列表 formatLabelsForDisplay 与 normalizeNodeType 解析（多标签节点 MATCH 仍取首个合法标签，属折中）**
 8. **llm/types.ts - 大模型递归次数限制可配置**
-9. **lbug/csv-generator.ts - 文件截断大小优化**
+9. **lbug/csv-generator.ts - 文件截断大小优化；File 节点 MAX_FILE_CONTENT 200000→600000（与 CLI 侧及 read 工具上限对齐）**
 10. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; CPP_QUERIES补全类内方法声明捕获规则（field_identifier、pointer_declarator、析构函数declaration）**
 
 

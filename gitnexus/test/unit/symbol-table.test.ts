@@ -30,12 +30,11 @@ describe('SymbolTable', () => {
       expect(table.getStats().globalSymbolCount).toBe(1);
     });
 
-    it('allows duplicate adds for same file and name', () => {
+    it('keeps multiple overloads for same file and name', () => {
       table.add('src/a.ts', 'foo', 'func:foo:1', 'Function');
       table.add('src/a.ts', 'foo', 'func:foo:2', 'Function');
-      // File index overwrites: last wins
-      expect(table.lookupExact('src/a.ts', 'foo')).toBe('func:foo:2');
-      // Global index appends
+      expect(table.lookupExactAllFull('src/a.ts', 'foo')).toHaveLength(2);
+      expect(table.lookupExact('src/a.ts', 'foo')).toBe('func:foo:1');
       expect(table.lookupFuzzy('foo')).toHaveLength(2);
     });
   });

@@ -321,6 +321,20 @@ export const CPP_QUERIES = `
     declarator: (function_declarator
       declarator: [(field_identifier) (identifier) (operator_name) (destructor_name)] @name)) @definition.method)
 
+; Inline methods with body returning pointers/references (mirror file-scope patterns)
+(field_declaration_list
+  (function_definition
+    declarator: (pointer_declarator declarator: (function_declarator
+      declarator: [(field_identifier) (identifier) (operator_name) (destructor_name)] @name))) @definition.method)
+(field_declaration_list
+  (function_definition
+    declarator: (pointer_declarator declarator: (pointer_declarator declarator: (function_declarator
+      declarator: [(field_identifier) (identifier) (operator_name) (destructor_name)] @name)))) @definition.method)
+(field_declaration_list
+  (function_definition
+    declarator: (reference_declarator (function_declarator
+      declarator: [(field_identifier) (identifier) (operator_name) (destructor_name)] @name))) @definition.method)
+
 ; Templates
 (template_declaration (class_specifier name: (type_identifier) @name body: (field_declaration_list))) @definition.template
 (template_declaration (function_definition declarator: (function_declarator declarator: (identifier) @name))) @definition.template

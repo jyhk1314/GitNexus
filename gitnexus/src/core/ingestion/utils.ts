@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type Parser from 'tree-sitter';
 import { SupportedLanguages } from '../../config/supported-languages.js';
 import { generateId } from '../../lib/utils.js';
@@ -545,6 +546,67 @@ export interface MethodSignature {
   parameterCount: number | undefined;
   returnType: string | undefined;
 }
+
+const CPP_PARAM_LIST_TYPES = new Set([
+  'formal_parameters', 'parameters', 'parameter_list',
+  'function_parameters', 'method_parameters', 'function_value_parameters',
+]);
+
+/**
+ * Walk AST for a callable definition and return a stable fingerprint of the parameter list
+ * (C/C++ `parameter_list`), used to disambiguate overloaded class methods in node ids.
+ * Uses only each parameter's **type** subtree (no parameter name, no default argument) so that
+ * a header declaration and an out-of-line definition of the same function share one id.
+ * Declarations with default arguments use `optional_parameter_declaration` in tree-sitter-cpp;
+ * definitions use `parameter_declaration` — both must be handled.
+ */
+const cppParameterListFingerprint = (node: SyntaxNode | null | undefined): string => {
+  if (!node) return '';
+
+  const findParameterList = (current: SyntaxNode): SyntaxNode | null => {
+    for (const child of current.children) {
+      if (CPP_PARAM_LIST_TYPES.has(child.type)) return child;
+    }
+    for (const child of current.children) {
+      const nested = findParameterList(child);
+      if (nested) return nested;
+    }
+    return null;
+  };
+
+  const parameterList =
+    CPP_PARAM_LIST_TYPES.has(node.type)
+      ? node
+      : node.childForFieldName?.('parameters') ?? findParameterList(node);
+
+  if (!parameterList || !CPP_PARAM_LIST_TYPES.has(parameterList.type)) return '';
+
+  const parts: string[] = [];
+  for (const child of parameterList.children) {
+    if (child.type === 'comment') continue;
+    if (!child.isNamed && child.text === '...') {
+      parts.push('...');
+      continue;
+    }
+    if (!child.isNamed) continue;
+    if (child.type === 'parameter_declaration' || child.type === 'optional_parameter_declaration') {
+      const typeNode = child.childForFieldName?.('type');
+      const seg = typeNode
+        ? typeNode.text.replace(/\s+/g, ' ').trim()
+        : '?';
+      parts.push(seg);
+    }
+  }
+  return parts.join('\x1e');
+};
+
+/**
+ * Short hex segment for C++ class-scoped Method/Constructor node ids (overload disambiguation).
+ */
+export const hashCppCallableOverloadSegment = (definitionNode: SyntaxNode | null | undefined): string => {
+  const fp = cppParameterListFingerprint(definitionNode);
+  return createHash('sha256').update(fp, 'utf8').digest('hex').slice(0, 12);
+};
 
 const CALL_ARGUMENT_LIST_TYPES = new Set([
   'arguments',

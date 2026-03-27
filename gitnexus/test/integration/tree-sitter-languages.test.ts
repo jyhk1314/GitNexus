@@ -195,6 +195,27 @@ describe('Tree-sitter multi-language parsing', () => {
       expect(names).toContain('at');
     });
 
+    it('captures inline class methods with pointer/reference return and body', async () => {
+      await loadLanguage(SupportedLanguages.CPlusPlus);
+      const code = `
+        struct ZmdbParseSqlStruct {};
+        class ZmdbParseQuery {
+        public:
+          ZmdbParseSqlStruct* GetSQLResult() { return nullptr; }
+          virtual const char* GetProvider() { return nullptr; }
+          int** doublePtr() { return nullptr; }
+          int& refMember() { static int x; return x; }
+        };
+      `;
+      const { matches } = parseAndQuery(parser, code, LANGUAGE_QUERIES[SupportedLanguages.CPlusPlus]);
+      const defs = extractDefinitions(matches);
+      const names = defs.map(d => d.name);
+      expect(names).toContain('GetSQLResult');
+      expect(names).toContain('GetProvider');
+      expect(names).toContain('doublePtr');
+      expect(names).toContain('refMember');
+    });
+
     it('captures destructor definitions', async () => {
       await loadLanguage(SupportedLanguages.CPlusPlus);
       const code = `MyClass::~MyClass() { cleanup(); }`;

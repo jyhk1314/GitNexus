@@ -514,7 +514,7 @@ MATCH (n:Function {id: emb.nodeId}) RETURN n`,
       }
       
       // Truncate large files
-      const MAX_CONTENT = 200000;
+      const MAX_CONTENT = 600000;
       if (content.length > MAX_CONTENT) {
         const lines = content.split('\n').length;
         return `File: ${actualPath} (${lines} lines, truncated)\n\n${content.slice(0, MAX_CONTENT)}\n\n... [truncated]`;

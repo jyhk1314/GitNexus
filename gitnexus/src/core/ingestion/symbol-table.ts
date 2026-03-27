@@ -20,30 +20,35 @@ export interface SymbolTable {
     type: string,
     metadata?: { parameterCount?: number; returnType?: string; ownerId?: string }
   ) => void;
-  
+
   /**
    * High Confidence: Look for a symbol specifically inside a file
    * Returns the Node ID if found
    */
   lookupExact: (filePath: string, name: string) => string | undefined;
-  
+
   /**
    * High Confidence: Look for a symbol in a specific file, returning full definition.
-   * Includes type information needed for heritage resolution (Class vs Interface).
+   * When multiple overloads share a name, returns the first registered entry.
    */
   lookupExactFull: (filePath: string, name: string) => SymbolDefinition | undefined;
+
+  /**
+   * All definitions in a file under a given symbol name (e.g. C++ overloads).
+   */
+  lookupExactAllFull: (filePath: string, name: string) => SymbolDefinition[];
 
   /**
    * Low Confidence: Look for a symbol anywhere in the project
    * Used when imports are missing or for framework magic
    */
   lookupFuzzy: (name: string) => SymbolDefinition[];
-  
+
   /**
    * Debugging: See how many symbols are tracked
    */
   getStats: () => { fileCount: number; globalSymbolCount: number };
-  
+
   /**
    * Cleanup memory
    */
@@ -51,12 +56,10 @@ export interface SymbolTable {
 }
 
 export const createSymbolTable = (): SymbolTable => {
-  // 1. File-Specific Index — stores full SymbolDefinition for O(1) lookupExactFull
-  // Structure: FilePath -> (SymbolName -> SymbolDefinition)
-  const fileIndex = new Map<string, Map<string, SymbolDefinition>>();
+  // FilePath -> (SymbolName -> [definitions]) — supports overloads in one TU
+  const fileIndex = new Map<string, Map<string, SymbolDefinition[]>>();
 
-  // 2. Global Reverse Index (The "Backup")
-  // Structure: SymbolName -> [List of Definitions]
+  // SymbolName -> [definitions across files]
   const globalIndex = new Map<string, SymbolDefinition[]>();
 
   const add = (
@@ -75,25 +78,35 @@ export const createSymbolTable = (): SymbolTable => {
       ...(metadata?.ownerId !== undefined ? { ownerId: metadata.ownerId } : {}),
     };
 
-    // A. Add to File Index (shared reference — zero additional memory)
     if (!fileIndex.has(filePath)) {
       fileIndex.set(filePath, new Map());
     }
-    fileIndex.get(filePath)!.set(name, def);
-
-    // B. Add to Global Index (same object reference)
-    if (!globalIndex.has(name)) {
-      globalIndex.set(name, []);
+    const nameMap = fileIndex.get(filePath)!;
+    if (!nameMap.has(name)) {
+      nameMap.set(name, []);
     }
-    globalIndex.get(name)!.push(def);
+    const fileSyms = nameMap.get(name)!;
+    const dupIdx = fileSyms.findIndex(d => d.nodeId === def.nodeId);
+    if (dupIdx >= 0) fileSyms[dupIdx] = def;
+    else fileSyms.push(def);
+
+    const gList = globalIndex.get(name) ?? [];
+    const gFiltered = gList.filter(d => d.nodeId !== def.nodeId);
+    gFiltered.push(def);
+    globalIndex.set(name, gFiltered);
+  };
+
+  const lookupExactAllFull = (filePath: string, name: string): SymbolDefinition[] => {
+    const list = fileIndex.get(filePath)?.get(name);
+    return list ? [...list] : [];
   };
 
   const lookupExact = (filePath: string, name: string): string | undefined => {
-    return fileIndex.get(filePath)?.get(name)?.nodeId;
+    return lookupExactAllFull(filePath, name)[0]?.nodeId;
   };
 
   const lookupExactFull = (filePath: string, name: string): SymbolDefinition | undefined => {
-    return fileIndex.get(filePath)?.get(name);
+    return lookupExactAllFull(filePath, name)[0];
   };
 
   const lookupFuzzy = (name: string): SymbolDefinition[] => {
@@ -102,7 +115,7 @@ export const createSymbolTable = (): SymbolTable => {
 
   const getStats = () => ({
     fileCount: fileIndex.size,
-    globalSymbolCount: globalIndex.size
+    globalSymbolCount: globalIndex.size,
   });
 
   const clear = () => {
@@ -110,5 +123,5 @@ export const createSymbolTable = (): SymbolTable => {
     globalIndex.clear();
   };
 
-  return { add, lookupExact, lookupExactFull, lookupFuzzy, getStats, clear };
+  return { add, lookupExact, lookupExactFull, lookupExactAllFull, lookupFuzzy, getStats, clear };
 };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractMethodSignature } from '../../src/core/ingestion/utils.js';
+import { extractMethodSignature, hashCppCallableOverloadSegment } from '../../src/core/ingestion/utils.js';
 import Parser from 'tree-sitter';
 import TypeScript from 'tree-sitter-typescript';
 import Python from 'tree-sitter-python';
@@ -420,5 +420,60 @@ func log(args ...string) int { return 0 }`;
       const sig = extractMethodSignature(functionNode);
       expect(sig.parameterCount).toBeUndefined();
     });
+  });
+});
+
+describe('hashCppCallableOverloadSegment', () => {
+  const parser = new Parser();
+
+  it('produces distinct 12-char segments for C++ overloads', () => {
+    parser.setLanguage(CPP);
+    const code = `void foo(int x) {}
+void foo(double y) {}`;
+    const tree = parser.parse(code);
+    const a = tree.rootNode.namedChild(0)!;
+    const b = tree.rootNode.namedChild(1)!;
+    const h1 = hashCppCallableOverloadSegment(a);
+    const h2 = hashCppCallableOverloadSegment(b);
+    expect(h1).toHaveLength(12);
+    expect(h2).toHaveLength(12);
+    expect(h1).not.toBe(h2);
+  });
+
+  it('is stable for empty parameter list', () => {
+    parser.setLanguage(CPP);
+    const tree = parser.parse('void bar() {}');
+    const fn = tree.rootNode.namedChild(0)!;
+    expect(hashCppCallableOverloadSegment(fn)).toBe(hashCppCallableOverloadSegment(fn));
+  });
+
+  it('matches declaration with default argument to definition without (type-only fingerprint)', () => {
+    parser.setLanguage(CPP);
+    const declTree = parser.parse('bool Connect(bool bIsAutoCommit = false);');
+    const defTree = parser.parse('bool Connect(bool bIsAutoCommit) {}');
+    const declNode = declTree.rootNode.namedChild(0)!;
+    const defNode = defTree.rootNode.namedChild(0)!;
+    expect(hashCppCallableOverloadSegment(declNode)).toBe(hashCppCallableOverloadSegment(defNode));
+  });
+
+  it('matches class declaration with default arg to out-of-line definition (optional_parameter_declaration)', () => {
+    parser.setLanguage(CPP);
+    const header = `class TZmdbLocalDatabase {
+  bool Connect(bool bIsAutoCommit = false);
+};`;
+    const cpp = `bool TZmdbLocalDatabase::Connect(bool bIsAutoCommit) {}`;
+    const hTree = parser.parse(header);
+    const cppTree = parser.parse(cpp);
+    const find = (root: { type: string; children: any[] }, t: string): any => {
+      if (root.type === t) return root;
+      for (const c of root.children) {
+        const f = find(c, t);
+        if (f) return f;
+      }
+      return null;
+    };
+    const fieldDecl = find(hTree.rootNode, 'field_declaration')!;
+    const fnDef = find(cppTree.rootNode, 'function_definition')!;
+    expect(hashCppCallableOverloadSegment(fieldDecl)).toBe(hashCppCallableOverloadSegment(fnDef));
   });
 });

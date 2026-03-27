@@ -7,31 +7,34 @@
 ## 一、背景：`.h` 与 `.cpp` 为何共用一个节点
 
 - C++ 类成员在头文件中常为**声明**，在 `.cpp` 中为**带 `ClassName::` 的定义**。
-- 解析层使用**类作用域的 `nodeId`**（`enclosingClassId` + 方法名），使同一成员在 `.h` 与 `.cpp` 中对应**同一个图节点**，便于 `HAS_METHOD`、调用图等与类对齐。
+- 解析层使用**类作用域的 `nodeId`**：`enclosingClassId` + 方法名 + **`#` + 参数类型列表指纹**（仅各形参的 **type** 子树文本，**不含**形参名与默认实参；再 SHA256 截断），使头文件声明与 `.cpp` 定义在**同一重载**上 id 一致，**不同重载**（参数类型不同）则为不同节点。
 - 合并写入内存图时，历史上采用 **「同 id 先写入者优先」**：`addNode` 在节点已存在时直接忽略后续写入。
 
 在常见 **glob 顺序下先扫 `.h` 再扫 `.cpp`** 时，Method 节点上的 `filePath`、`startLine` 等会长期停留在**头文件**，表或查询里看起来像「只有声明、没有实现位置」。
 
 ---
 
-## 二、改造：实现文件覆盖声明侧属性
+## 二、改造：`.cpp` 对同 id 的 Method/Constructor 高优先级覆盖
 
 **文件**：`gitnexus/src/core/graph/graph.ts`
 
-**规则**：当 **同一 `id` 已存在**，且本次写入的节点满足：
+**规则**：当 **同一 `id` 已存在**，且**本次**写入的节点满足：
 
 - `label` 为 **`Method` 或 `Constructor`**
-- `properties.language` 为 **`cpp`**（`SupportedLanguages.CPlusPlus`）
+- `properties.language` 为 **`cpp`**
 - `properties.filePath` 以 **`.cpp`、`.cc`、`.cxx`** 结尾（大小写不敏感）
 
-则 **用本次节点整颗替换** 图中已有节点（更新 `filePath`、`startLine`、`endLine`、`returnType` 等）。
+则 **用本次节点整颗替换** 图中已有节点（与已有节点来自 `.h` 或另一 `.cpp` 无关）。**后写入的 `.cpp` 覆盖先写入的**（同 id 时）。
+
+**`nodeId` 指纹**：`gitnexus/src/core/ingestion/utils.ts` 的 `hashCppCallableOverloadSegment`：对每个形参只取 **`type` 字段**的文本（规范化空白），**忽略**形参名与默认实参。tree-sitter-cpp 中带默认实参的声明常用 **`optional_parameter_declaration`**，实现侧为 **`parameter_declaration`**，两者都参与指纹。在 **`parsing-processor` / `parse-worker`** 中仅对**类作用域**下的 `Method`/`Constructor` 追加 `#` 段。
 
 **效果**：
 
 | 顺序 | 结果 |
 |------|------|
-| 先 `.h` 后 `.cpp` | 最终属性以 **实现文件** 为准。 |
-| 先 `.cpp` 后 `.h` | 仍为 **实现文件**（`.h` 不满足覆盖条件，第二次写入被忽略）。 |
+| 先 `.h` 后 `.cpp`（同 id） | 最终属性以 **后到的实现文件** 为准。 |
+| 先 `.cpp` 后 `.h` | **仍为先写入的 `.cpp`**（`.h` 不满足覆盖条件，第二次写入被忽略）。 |
+| 两个 `.cpp` 同 id | **后写入者覆盖**（重载一般 id 不同；同 id 多为同一符号多次 ingest）。 |
 
 **非 C++** 或其它标签的重复 `id` 行为不变：**仍为先写入者优先**。
 
@@ -41,9 +44,9 @@
 
 | 关系 | 是否受影响 | 说明 |
 |------|------------|------|
-| **`HAS_METHOD`（Class → Method）** | **基本不变** | `sourceId` / `targetId` 仍是类 id 与方法 id；方法 id 未改，边仍指向同一节点。`.h` 与 `.cpp` 各可能尝试创建 `HAS_METHOD`，关系 id 相同则第二条为幂等跳过，与改造前一致。 |
-| **`DEFINES`（File → Symbol）** | **不变** | 关系含 **File** 端，头文件与实现文件可各有一条指向同一 Method id，改造不删除或合并这类边。 |
-| **调用、其它边** | **不变** | 仍以方法 **nodeId** 为端点。 |
+| **`HAS_METHOD`（Class → Method）** | **重载时多条** | 每个重载一个方法 id，同一类可有多条 `HAS_METHOD`。同 id 时行为与以前一致（幂等）。 |
+| **`DEFINES`（File → Symbol）** | **不变** | 头/源可各有一条指向同一 Method id。 |
+| **`CALLS` 等** | **仍以 nodeId 为端点** | 解析在能消歧时指向对应重载；符号表同文件同名多定义见 `lookupExactAllFull`。 |
 
 ---
 
@@ -83,4 +86,5 @@
 
 ## 六、单元测试
 
-- `gitnexus/test/unit/graph.test.ts`：覆盖「`.h` → `.cpp` 覆盖」「`.cpp` → `.h` 不覆盖」及 `.cc`/`.cxx` 后缀。
+- `gitnexus/test/unit/graph.test.ts`：覆盖「`.h` → `.cpp` 覆盖」「`.cpp` → `.h` 不覆盖」「两个 `.cpp` 同 id 后者覆盖」及 `.cc`/`.cxx` 后缀。
+- `gitnexus/test/integration/tree-sitter-languages.test.ts`：类内指针/引用返回且带函数体的成员捕获。

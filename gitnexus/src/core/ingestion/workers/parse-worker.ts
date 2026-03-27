@@ -29,6 +29,7 @@ import {
   getDefinitionNodeFromCaptures,
   findEnclosingClassId,
   extractMethodSignature,
+  hashCppCallableOverloadSegment,
   countCallArguments,
   inferCallForm,
   extractReceiverName
@@ -1090,9 +1091,16 @@ const processFileGroup = (
       // When a method belongs to a class, use the class id as scope instead of filePath so that
       // declarations in .h and definitions in .cpp merge into the same graph node.
       const nodeIdScope = enclosingClassId ?? file.path;
+      const cppOverloadSeg =
+        language === SupportedLanguages.CPlusPlus &&
+        enclosingClassId &&
+        (effectiveLabel === 'Method' || effectiveLabel === 'Constructor')
+          ? hashCppCallableOverloadSegment(definitionNode)
+          : '';
+      const nodeIdStem = `${nodeIdScope}:${nodeName}${cppOverloadSeg ? `#${cppOverloadSeg}` : ''}`;
       const nodeId = isCppClassDef
         ? generateId(effectiveLabel, nodeName)
-        : generateId(effectiveLabel, `${nodeIdScope}:${nodeName}`);
+        : generateId(effectiveLabel, nodeIdStem);
 
       let description: string | undefined;
       if (language === SupportedLanguages.PHP) {

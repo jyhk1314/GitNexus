@@ -115,6 +115,38 @@ describe('createKnowledgeGraph', () => {
     expect(g.getNode(id)!.properties.filePath).toBe('src/Foo.cpp');
   });
 
+  it('C++ Method from .cpp overrides earlier duplicate id from another .cpp (last .cpp wins)', () => {
+    const g = createKnowledgeGraph();
+    const id = 'Method:Class:Q:run';
+    const cpp1: GraphNode = {
+      id,
+      label: 'Method',
+      properties: {
+        name: 'run',
+        filePath: 'src/a.cpp',
+        language: SupportedLanguages.CPlusPlus,
+        startLine: 1,
+        endLine: 2,
+      },
+    };
+    const cpp2: GraphNode = {
+      id,
+      label: 'Method',
+      properties: {
+        name: 'run',
+        filePath: 'src/b.cpp',
+        language: SupportedLanguages.CPlusPlus,
+        startLine: 10,
+        endLine: 11,
+      },
+    };
+    g.addNode(cpp1);
+    g.addNode(cpp2);
+    expect(g.nodeCount).toBe(1);
+    expect(g.getNode(id)!.properties.filePath).toBe('src/b.cpp');
+    expect(g.getNode(id)!.properties.startLine).toBe(10);
+  });
+
   it('.cc and .cxx count as C++ implementation override', () => {
     const g = createKnowledgeGraph();
     const idCc = 'Method:Class:A:m1';

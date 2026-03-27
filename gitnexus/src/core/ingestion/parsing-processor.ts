@@ -5,7 +5,7 @@ import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
 import { SymbolTable } from './symbol-table.js';
 import { ASTCache } from './ast-cache.js';
-import { getLanguageFromFilename, yieldToEventLoop, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures, findEnclosingClassId, extractMethodSignature } from './utils.js';
+import { getLanguageFromFilename, yieldToEventLoop, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures, findEnclosingClassId, extractMethodSignature, hashCppCallableOverloadSegment } from './utils.js';
 import { preprocessCppExportMacros } from './cpp-export-macro-preprocess.js';
 import { isNodeExported } from './export-detection.js';
 import { detectFrameworkFromAST } from './framework-detection.js';
@@ -264,9 +264,16 @@ const processParsingSequential = async (
       // When a method belongs to a class, use the class id as scope instead of filePath so that
       // declarations in .h and definitions in .cpp merge into the same graph node.
       const nodeIdScope = enclosingClassId ?? file.path;
+      const cppOverloadSeg =
+        language === SupportedLanguages.CPlusPlus &&
+        enclosingClassId &&
+        (effectiveLabel === 'Method' || effectiveLabel === 'Constructor')
+          ? hashCppCallableOverloadSegment(definitionNodeForRange)
+          : '';
+      const nodeIdStem = `${nodeIdScope}:${nodeName}${cppOverloadSeg ? `#${cppOverloadSeg}` : ''}`;
       const nodeId = isCppClassDef
         ? generateId(effectiveLabel, nodeName)
-        : generateId(effectiveLabel, `${nodeIdScope}:${nodeName}`);
+        : generateId(effectiveLabel, nodeIdStem);
 
       const definitionNode = getDefinitionNodeFromCaptures(captureMap);
       const frameworkHint = definitionNode

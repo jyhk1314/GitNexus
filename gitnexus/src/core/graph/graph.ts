@@ -5,8 +5,9 @@ import { SupportedLanguages } from '../../config/supported-languages.js';
 const CPP_IMPL_PATH = /\.(cpp|cc|cxx)$/i;
 
 /**
- * Later ingest pass from a .cpp/.cc/.cxx file should win over an earlier .h declaration
- * for the same Method/Constructor node id (C++ declaration/definition merge).
+ * Later ingest pass from a .cpp/.cc/.cxx wins over any earlier node with the same id for C++
+ * Method/Constructor (declaration in .h or a prior .cpp). Overloads use distinct ids via the
+ * type-only parameter fingerprint in parsing.
  */
 const isCppMethodImplementationOverride = (node: GraphNode): boolean => {
   if (node.label !== 'Method' && node.label !== 'Constructor') return false;

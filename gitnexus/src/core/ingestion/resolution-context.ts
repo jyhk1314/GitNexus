@@ -6,7 +6,7 @@
  * call-processor.ts.
  *
  * Resolution tiers (highest confidence first):
- * 1. Same file (lookupExactFull — authoritative)
+ * 1. Same file (lookupExactAllFull — authoritative; supports overloads)
  * 2a-named. Named binding chain (walkBindingChain via NamedImportMap)
  * 2a. Import-scoped (lookupFuzzy filtered by ImportMap)
  * 2b. Package-scoped (lookupFuzzy filtered by PackageMap)
@@ -82,9 +82,9 @@ export const createResolutionContext = (): ResolutionContext => {
 
   const resolveUncached = (name: string, fromFile: string): TieredCandidates | null => {
     // Tier 1: Same file — authoritative match
-    const localDef = symbols.lookupExactFull(fromFile, name);
-    if (localDef) {
-      return { candidates: [localDef], tier: 'same-file' };
+    const localDefs = symbols.lookupExactAllFull(fromFile, name);
+    if (localDefs.length > 0) {
+      return { candidates: localDefs, tier: 'same-file' };
     }
 
     // Get all global definitions for subsequent tiers
