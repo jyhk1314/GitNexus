@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { createKnowledgeGraph } from '../../src/core/graph/graph.js';
 import type { GraphNode, GraphRelationship } from '../../src/core/graph/types.js';
+import { SupportedLanguages } from '../../src/config/supported-languages.js';
 
 function makeNode(id: string, name: string, filePath: string = 'src/test.ts'): GraphNode {
   return {
@@ -50,6 +51,97 @@ describe('createKnowledgeGraph', () => {
     g.addNode(node2);
     expect(g.nodeCount).toBe(1);
     expect(g.getNode('fn:foo')!.properties.name).toBe('foo'); // first one wins
+  });
+
+  it('C++ Method from .cpp overrides earlier duplicate id from .h', () => {
+    const g = createKnowledgeGraph();
+    const id = 'Method:Class:Foo:bar';
+    const fromH: GraphNode = {
+      id,
+      label: 'Method',
+      properties: {
+        name: 'bar',
+        filePath: 'src/Foo.h',
+        language: SupportedLanguages.CPlusPlus,
+        startLine: 1,
+        endLine: 2,
+      },
+    };
+    const fromCpp: GraphNode = {
+      id,
+      label: 'Method',
+      properties: {
+        name: 'bar',
+        filePath: 'src/Foo.cpp',
+        language: SupportedLanguages.CPlusPlus,
+        startLine: 10,
+        endLine: 20,
+      },
+    };
+    g.addNode(fromH);
+    g.addNode(fromCpp);
+    expect(g.nodeCount).toBe(1);
+    expect(g.getNode(id)!.properties.filePath).toBe('src/Foo.cpp');
+    expect(g.getNode(id)!.properties.startLine).toBe(10);
+  });
+
+  it('C++ Method from .h does not override earlier .cpp', () => {
+    const g = createKnowledgeGraph();
+    const id = 'Method:Class:Foo:baz';
+    const fromCpp: GraphNode = {
+      id,
+      label: 'Method',
+      properties: {
+        name: 'baz',
+        filePath: 'src/Foo.cpp',
+        language: SupportedLanguages.CPlusPlus,
+        startLine: 5,
+        endLine: 6,
+      },
+    };
+    const fromH: GraphNode = {
+      id,
+      label: 'Method',
+      properties: {
+        name: 'baz',
+        filePath: 'src/Foo.h',
+        language: SupportedLanguages.CPlusPlus,
+        startLine: 1,
+        endLine: 1,
+      },
+    };
+    g.addNode(fromCpp);
+    g.addNode(fromH);
+    expect(g.getNode(id)!.properties.filePath).toBe('src/Foo.cpp');
+  });
+
+  it('.cc and .cxx count as C++ implementation override', () => {
+    const g = createKnowledgeGraph();
+    const idCc = 'Method:Class:A:m1';
+    g.addNode({
+      id: idCc,
+      label: 'Method',
+      properties: { name: 'm1', filePath: 'a.h', language: SupportedLanguages.CPlusPlus },
+    });
+    g.addNode({
+      id: idCc,
+      label: 'Method',
+      properties: { name: 'm1', filePath: 'a.cc', language: SupportedLanguages.CPlusPlus, startLine: 3 },
+    });
+    expect(g.getNode(idCc)!.properties.filePath).toBe('a.cc');
+
+    const idCxx = 'Method:Class:A:m2';
+    g.addNode({
+      id: idCxx,
+      label: 'Method',
+      properties: { name: 'm2', filePath: 'b.h', language: SupportedLanguages.CPlusPlus },
+    });
+    g.addNode({
+      id: idCxx,
+      label: 'Method',
+      properties: { name: 'm2', filePath: 'b.CXX', language: SupportedLanguages.CPlusPlus },
+    });
+    expect(g.getNode(idCxx)!.properties.filePath).toBe('b.CXX');
   });
 
   // ─── removeNode ─────────────────────────────────────────────────────

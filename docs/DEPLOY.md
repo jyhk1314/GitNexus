@@ -43,6 +43,7 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
 - **填写令牌**：在研发云仓库 → 应用菜单中申请令牌（私有仓库必填）。
 - **代码保存位置**：**服务端** `{HOME 或 cwd}/ginexus_code/{仓库名}`，不再在浏览器内拉取。
 - **GBK→UTF-8**：clone 完成后、建索引前，服务端会自动调用 `scripts/convert_to_utf8.py` 将仓库内文本转为 UTF-8。需在 **运行 serve 的机器** 上安装 **Python**，并确保 gitnexus 包内存在 `scripts/convert_to_utf8.py`。若未转成 UTF-8，请查看 serve 控制台 “UTF-8 conversion skipped” / “UTF-8 conversion failed” 日志。
+- **C++ Method 合并与解析顺序**：`.h`/`.cpp` 同 id 合并、实现文件覆盖节点展示位置，以及分析时可选的 `parse-order.log`（Local Git 下默认随 `GITNEXUS_PROGRESS` 写入克隆目录 `.gitnexus/`），见 **`docs/CXX_METHOD_MERGE_AND_PARSE_ORDER.md`**。
 
 ### 4. Server — 直连已有后端
 

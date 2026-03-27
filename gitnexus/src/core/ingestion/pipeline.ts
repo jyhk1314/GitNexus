@@ -14,7 +14,7 @@ import { processProcesses } from './process-processor.js';
 import { createResolutionContext } from './resolution-context.js';
 import { createASTCache } from './ast-cache.js';
 import { PipelineProgress, PipelineResult } from '../../types/pipeline.js';
-import { walkRepositoryPaths, readFileContents } from './filesystem-walker.js';
+import { walkRepositoryPaths, readFileContents, type ScannedFile } from './filesystem-walker.js';
 import { getLanguageFromFilename } from './utils.js';
 import { isLanguageAvailable } from '../tree-sitter/parser-loader.js';
 import { createWorkerPool, WorkerPool } from './workers/worker-pool.js';
@@ -23,6 +23,69 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const isDev = process.env.NODE_ENV === 'development';
+
+/**
+ * Write `.gitnexus/parse-order.log` when:
+ * - `GITNEXUS_LOG_PARSE_ORDER` is 1/true/yes/on, or
+ * - `GITNEXUS_PROGRESS` is on (clone-analyze / serve always sets this on the analyze child).
+ * Disable with `GITNEXUS_LOG_PARSE_ORDER=0` (or false/no/off) even under GITNEXUS_PROGRESS.
+ */
+const isParseOrderLogEnabled = (): boolean => {
+  const explicit = (process.env.GITNEXUS_LOG_PARSE_ORDER || '').trim().toLowerCase();
+  if (explicit === '0' || explicit === 'false' || explicit === 'no' || explicit === 'off') {
+    return false;
+  }
+  if (explicit === '1' || explicit === 'true' || explicit === 'yes' || explicit === 'on') {
+    return true;
+  }
+  const progress = (process.env.GITNEXUS_PROGRESS || '').trim().toLowerCase();
+  return progress === '1' || progress === 'true' || progress === 'yes' || progress === 'on';
+};
+
+/**
+ * Debug: record the parse pipeline file order (matches chunk sequence and in-chunk worker merge).
+ * Uses stderr so clone-analyze (GITNEXUS_PROGRESS JSON on stdout) is not corrupted.
+ */
+const maybeWriteParseOrderLog = (
+  repoPath: string,
+  parseableScanned: ScannedFile[],
+  chunks: string[][],
+  scannedTotal: number,
+): void => {
+  if (!isParseOrderLogEnabled()) return;
+  try {
+    const dir = path.join(repoPath, '.gitnexus');
+    fs.mkdirSync(dir, { recursive: true });
+    const outPath = path.join(dir, 'parse-order.log');
+    const lines: string[] = [
+      '# gitnexus parse-order v1',
+      `# generated: ${new Date().toISOString()}`,
+      `# scanned_total: ${scannedTotal}`,
+      `# parseable: ${parseableScanned.length}`,
+      `# chunks: ${chunks.length}`,
+      '#',
+      '# One path per line: order used across pipeline chunks (same as merge order for first addNode wins).',
+      '#',
+    ];
+    for (const f of parseableScanned) {
+      lines.push(f.path);
+    }
+    lines.push('#');
+    lines.push('# chunk_ranges: chunk_index start_index_in_list file_count');
+    let idx = 0;
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const c = chunks[ci];
+      lines.push(`# ${ci} ${idx} ${c.length}`);
+      idx += c.length;
+    }
+    fs.writeFileSync(outPath, `${lines.join('\n')}\n`, 'utf8');
+    console.error(
+      `[GitNexus] parse-order: wrote ${parseableScanned.length} paths (${path.resolve(outPath)})`,
+    );
+  } catch (e) {
+    console.error('[GitNexus] parse-order: failed to write log:', (e as Error).message);
+  }
+};
 
 /** Max bytes of source content to load per parse chunk. Each chunk's source +
  *  parsed ASTs + extracted records + worker serialization overhead all live in
@@ -141,6 +204,8 @@ export const runPipelineFromRepo = async (
     if (currentChunk.length > 0) chunks.push(currentChunk);
 
     const numChunks = chunks.length;
+
+    maybeWriteParseOrderLog(repoPath, parseableScanned, chunks, totalFiles);
 
     if (isDev) {
       const totalMB = parseableScanned.reduce((s, f) => s + f.size, 0) / (1024 * 1024);

@@ -1,11 +1,30 @@
-import { GraphNode, GraphRelationship, KnowledgeGraph } from './types.js'
+import { GraphNode, GraphRelationship, KnowledgeGraph } from './types.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
+
+/** C++ translation-unit suffixes: out-of-line method definitions live here. */
+const CPP_IMPL_PATH = /\.(cpp|cc|cxx)$/i;
+
+/**
+ * Later ingest pass from a .cpp/.cc/.cxx file should win over an earlier .h declaration
+ * for the same Method/Constructor node id (C++ declaration/definition merge).
+ */
+const isCppMethodImplementationOverride = (node: GraphNode): boolean => {
+  if (node.label !== 'Method' && node.label !== 'Constructor') return false;
+  if (node.properties?.language !== SupportedLanguages.CPlusPlus) return false;
+  const fp = node.properties?.filePath ?? '';
+  return CPP_IMPL_PATH.test(fp);
+};
 
 export const createKnowledgeGraph = (): KnowledgeGraph => {
   const nodeMap = new Map<string, GraphNode>();
   const relationshipMap = new Map<string, GraphRelationship>();
 
   const addNode = (node: GraphNode) => {
-    if(!nodeMap.has(node.id)) {
+    if (!nodeMap.has(node.id)) {
+      nodeMap.set(node.id, node);
+      return;
+    }
+    if (isCppMethodImplementationOverride(node)) {
       nodeMap.set(node.id, node);
     }
   };

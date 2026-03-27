@@ -66,6 +66,9 @@
 16. **embeddings/embedding-pipeline.ts - 导出 createVectorIndex；semanticSearch 入口 await isEmbedderReady()**
 17. **embeddings/types.ts - maxSnippetLength 配置项注释（片段长度与算力权衡）**
 18. **search/hybrid-search.ts - mergeWithRRF：同一路径已写入语义元数据时，后续语义命中只累加 RRF 分，不覆盖 semanticScore、nodeId、行号等**
+19. **graph/graph.ts - C++ Method/Constructor 同 id 合并策略优化：后写入若来自 `.cpp`/`.cc`/`.cxx` 且 `language=cpp`，则覆盖图中已有节点（使 `filePath`/行号等优先反映实现文件）；`nodeId` 不变，`HAS_METHOD` 仍指向同一方法节点；非 C++ 或其它标签仍为「先写入者优先」**
+20. **ingestion/pipeline.ts - 解析顺序可观测：满足 `GITNEXUS_LOG_PARSE_ORDER` 或与 clone-analyze 一致的 `GITNEXUS_PROGRESS` 时，写入 `<repo>/.gitnexus/parse-order.log`（含 chunk 范围注释）；`GITNEXUS_LOG_PARSE_ORDER=0` 可显式关闭；stderr 输出绝对路径便于 serve/clone-analyze 排查**
+21. **test/unit/graph.test.ts - 覆盖 C++ 实现文件覆盖声明侧节点及 `.cc`/`.cxx` 后缀行为**
 
 #### 六、gitnexus-web/src/lib
 
