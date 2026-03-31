@@ -84,6 +84,7 @@ const processParsingWithWorkers = async (
         parameterCount: sym.parameterCount,
         returnType: sym.returnType,
         ownerId: sym.ownerId,
+        fieldType: sym.fieldType,
       });
     }
 
@@ -293,6 +294,15 @@ const processParsingSequential = async (
         }
       }
 
+      // C++ data member: encode ownerClassId + fieldType in description as JSON
+      let description: string | undefined;
+      let cppPropertyFieldType: string | undefined;
+      if (language === SupportedLanguages.CPlusPlus && nodeLabel === 'Property' && captureMap['prop.type']) {
+        const rawType = captureMap['prop.type'].text as string;
+        cppPropertyFieldType = rawType.replace(/\b(const|volatile|mutable|static)\b/g, '').replace(/[*&]/g, '').trim();
+        description = JSON.stringify({ ownerId: enclosingClassId ?? '', fieldType: cppPropertyFieldType });
+      }
+
       const node: GraphNode = {
         id: nodeId,
         label: effectiveLabel as any,
@@ -311,6 +321,7 @@ const processParsingSequential = async (
             parameterCount: methodSig.parameterCount,
             returnType: methodSig.returnType,
           } : {}),
+          ...(description !== undefined ? { description } : {}),
         },
       };
 
@@ -320,6 +331,7 @@ const processParsingSequential = async (
         parameterCount: methodSig?.parameterCount,
         returnType: methodSig?.returnType,
         ownerId: enclosingClassId ?? undefined,
+        fieldType: cppPropertyFieldType,
       });
 
       const fileId = generateId('File', file.path);

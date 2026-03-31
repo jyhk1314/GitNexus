@@ -162,6 +162,33 @@ describe('C++ member-call resolution', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Same-file short-name collision: tier has wrong-arity method; receiver narrows
+// ---------------------------------------------------------------------------
+
+describe('C++ member call same-file name collision (arity wipe + fuzzy widen)', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-member-samefile-name-collide'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves t.SetIPAndPort(4) inside TZmdbMigration::SetIPAndPort to TZmdbMgrServiceComm::SetIPAndPort', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const inner = calls.find(
+      c =>
+        c.target === 'SetIPAndPort' &&
+        c.targetFilePath === 'app.cpp' &&
+        c.rel.targetId.includes('TZmdbMgrServiceComm'),
+    );
+    expect(inner).toBeDefined();
+    expect(inner!.rel.sourceId).toContain('app.cpp');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Constructor resolution: new Foo() resolves to Class
 // ---------------------------------------------------------------------------
 
@@ -553,5 +580,73 @@ describe('C++ return-type inference via function return type', () => {
       c.target === 'save' && c.source === 'processRepo' && c.targetFilePath.includes('repo.h')
     );
     expect(saveCall).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-file member field resolution: m_user->save() resolves via Property node
+// ---------------------------------------------------------------------------
+
+describe('C++ cross-file member field resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-member-field'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects UserService and User classes', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('UserService');
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+  });
+
+  it('detects m_user as a Property node with fieldType=User', () => {
+    const props = result.graph.nodes.filter(n => n.label === 'Property' && n.properties.name === 'm_user');
+    expect(props.length).toBe(1);
+    const desc = JSON.parse(props[0].properties.description ?? '{}');
+    expect(desc.fieldType).toBe('User');
+  });
+
+  it('resolves m_user->persistUser() to User.persistUser via cross-file member field lookup', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const call = calls.find(c => c.target === 'persistUser' && c.source === 'process');
+    expect(call).toBeDefined();
+    expect(call!.targetFilePath).toContain('user.h');
+  });
+
+  it('resolves m_user->syncUserData() to User.syncUserData via cross-file member field lookup', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const call = calls.find(c => c.target === 'syncUserData' && c.source === 'process');
+    expect(call).toBeDefined();
+    expect(call!.targetFilePath).toContain('user.h');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Qualified call resolution: Type::staticMethod() resolves via qualifier scope
+// ---------------------------------------------------------------------------
+
+describe('C++ qualified call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-qualified-call'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Logger class and emitLogEntry method', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('Logger');
+    expect(getNodesByLabel(result, 'Method')).toContain('emitLogEntry');
+  });
+
+  it('resolves Logger::emitLogEntry() to Logger.emitLogEntry via qualifier type narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const logCall = calls.find(c => c.target === 'emitLogEntry' && c.source === 'run');
+    expect(logCall).toBeDefined();
+    expect(logCall!.targetFilePath).toContain('logger.h');
   });
 });

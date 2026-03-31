@@ -76,6 +76,22 @@
 26. **test/integration/tree-sitter-languages.test.ts - 类内指针/双重指针/引用返回且带函数体的成员方法捕获**
 27. **test/unit/symbol-table.test.ts - 同文件同名多 overload 保留与 `lookupExactAllFull` 长度断言**
 28. **test/unit/type-env.test.ts - Mock SymbolTable 补充 `lookupExactAllFull`**
+29. **ingestion/tree-sitter-queries.ts（追加）- CPP_QUERIES 新增类体内非函数 `field_declaration` 数据成员捕获（普通/指针/引用 declarator）、`@prop.type`；注释说明 `obj.method` 与 `obj->method` 均对应 field_expression**
+30. **ingestion/parsing-processor.ts（追加）- C++ Property：`description` JSON（`ownerId`、归一化 `fieldType`）；符号表注册 `fieldType`；worker 合并路径透传 `fieldType`**
+31. **ingestion/symbol-table.ts（追加）- `memberFieldIndex`（`ownerClassId`×字段名→`fieldType`）；`lookupMemberFieldType`；`SymbolDefinition` / `add` 元数据支持 `fieldType`**
+32. **ingestion/type-env.ts - `lookupWithMemberFields`：单文件 `lookupInEnv` 未命中时，按外围类名查 Class/Struct 再 `lookupMemberFieldType`，跨文件补成员变量静态类型（如 .h 声明、.cpp 方法体内使用）**
+33. **ingestion/utils.ts（追加）- `cppInClassCallableLabel`（类内 `Function`→`Method` 与 ingest 一致）；`getCallResolutionDebugMode` / `getCallResolutionDebugNameFilter`（环境变量 `GITNEXUS_DEBUG_CALLS`、`GITNEXUS_DEBUG_CALLS_NAME`）**
+34. **ingestion/workers/parse-worker.ts（追加）- `findEnclosingFunctionId` 对 C++ 类内 Method/Constructor 追加 `#hashCppCallableOverloadSegment` 与 `cppInClassCallableLabel`；`ExtractedCall` 增加 `line`、`qualifierTypeName`；C++ Property 与顺序路径一致的 `description`/`fieldType`**
+35. **ingestion/call-processor.ts（扩展）- C++ CALLS：`processCalls` 先解析调用方再 `resolveCallTarget`；`remapCppCallableSourceId`；`resolveCallTarget` 支持 `qualifierTypeName` 收窄、`callerOwnerClassId` 多候选时优先同 `ownerId`；`lookupMemberFieldType` 补全 member 调用的 `receiverTypeName`；顺序路径抽取限定名与调试日志**
+36. **test/unit/ingestion-utils.test.ts - `cppInClassCallableLabel` 单测**
+37. **test/integration/resolvers/cpp.test.ts - 集成：同文件短名碰撞（`cpp-member-samefile-name-collide`）、跨文件成员字段（`cpp-member-field`）、限定调用（`cpp-qualified-call`）**
+38. **src/tools/convert_to_csv.py - 内嵌导出脚本：节点 / CodeRelation / CodeEmbedding 分页 MATCH 增加 ORDER BY（稳定 SKIP/LIMIT）；stdout JSON 行解析失败计数与 stderr 告警**
+39. **AGENTS.md / CLAUDE.md - GitNexus 索引统计数字更新**
+40. **docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md - C++ CodeRelation（CALLS）优化方案与 §8 已落地实现对照**
+41. **docs/WORKING_TREE_CHANGES_2026-03-31.md - 工作区未提交改造摘要（与本文档第五节新增条目交叉引用）**
+42. **test/fixtures/lang-resolution/** - 未跟踪：`cpp-member-field`、`cpp-qualified-call`、`cpp-member-samefile-name-collide`、`cpp-call-resolution-debug-repro` 等最小复现工程（提交后集成测可移植）**
+43. **gitnexus/debug-*.mjs、gitnexus/scripts/repro-call-resolution-debug.mjs - 未跟踪：本地调用消解调试脚本（可选入库或 .gitignore）**
+44. **gitnexus/test/fixtures/mini-repo/** - 未跟踪：迷你仓库夹具（含 `.claude/skills`、`AGENTS.md`、`CLAUDE.md`）**
 
 #### 六、gitnexus-web/src/lib
 

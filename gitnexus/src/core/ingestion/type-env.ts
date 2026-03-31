@@ -355,8 +355,38 @@ export const buildTypeEnv = (
   };
 
   walk(tree.rootNode, FILE_SCOPE);
+
+  /**
+   * Extended lookup: first try the single-file env, then fall back to the
+   * SymbolTable's member-field index for cross-file C++ member variables.
+   *
+   * The cross-file path resolves patterns like `m_pShmDSN->GetInfo()` where
+   * `m_pShmDSN` is declared in a `.h` class body and used in a `.cpp` method:
+   * 1. Walk up from callNode to find the enclosing class name.
+   * 2. Resolve that class name to its nodeId via symbolTable.
+   * 3. Query memberFieldIndex(ownerClassId, varName) → fieldType.
+   */
+  const lookupWithMemberFields = (varName: string, callNode: SyntaxNode): string | undefined => {
+    const local = lookupInEnv(env, varName, callNode);
+    if (local) return local;
+
+    // Cross-file member variable lookup (C++ only, requires symbolTable)
+    if (!symbolTable) return undefined;
+
+    const enclosingClassName = findEnclosingClassName(callNode);
+    if (!enclosingClassName) return undefined;
+
+    const classDefs = symbolTable.lookupFuzzy(enclosingClassName);
+    for (const classDef of classDefs) {
+      if (classDef.type !== 'Class' && classDef.type !== 'Struct') continue;
+      const fieldType = symbolTable.lookupMemberFieldType(classDef.nodeId, varName);
+      if (fieldType) return fieldType;
+    }
+    return undefined;
+  };
+
   return {
-    lookup: (varName, callNode) => lookupInEnv(env, varName, callNode),
+    lookup: (varName, callNode) => lookupWithMemberFields(varName, callNode),
     constructorBindings: bindings,
     env,
   };

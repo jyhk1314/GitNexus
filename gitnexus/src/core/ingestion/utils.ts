@@ -468,6 +468,22 @@ export const extractFunctionName = (node: any): { funcName: string | null; label
 };
 
 /**
+ * C++ class-body `function_definition` often yields `extractFunctionName` label **Function** (plain
+ * identifier declarator), while ingestion uses **Method** when `enclosingClassId` is set
+ * (`parsing-processor` / `parse-worker` `effectiveLabel`). Call-site `sourceId` must match.
+ */
+export const cppInClassCallableLabel = (
+  language: SupportedLanguages | undefined,
+  extractedLabel: string,
+  enclosingClassId: string | null | undefined,
+): string => {
+  if (language === SupportedLanguages.CPlusPlus && extractedLabel === 'Function' && enclosingClassId) {
+    return 'Method';
+  }
+  return extractedLabel;
+};
+
+/**
  * Yield control to the event loop so spinners/progress can render.
  * Call periodically in hot loops to prevent UI freezes.
  */
@@ -993,6 +1009,21 @@ export const isVerboseIngestionEnabled = (): boolean => {
   return value === '1' || value === 'true' || value === 'yes';
 };
 
+/** `GITNEXUS_DEBUG_CALLS`: off | failures (1/true) | all (all/2/verbose) — callee resolution tracing. */
+export type CallResolutionDebugMode = 'off' | 'failures' | 'all';
 
+export const getCallResolutionDebugMode = (): CallResolutionDebugMode => {
+  const raw = process.env.GITNEXUS_DEBUG_CALLS?.trim().toLowerCase();
+  if (!raw) return 'off';
+  if (raw === 'all' || raw === '2' || raw === 'verbose') return 'all';
+  if (raw === '1' || raw === 'true' || raw === 'yes') return 'failures';
+  return 'off';
+};
+
+/** Optional: `GITNEXUS_DEBUG_CALLS_NAME=SetIPAndPort` — only log that callee short name (exact match). */
+export const getCallResolutionDebugNameFilter = (): string | undefined => {
+  const f = process.env.GITNEXUS_DEBUG_CALLS_NAME?.trim();
+  return f || undefined;
+};
 
 

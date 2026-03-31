@@ -173,7 +173,8 @@ async function run() {
       const cnt = Number(rowValue(countRows[0], 'cnt', 0) || 0);
       process.stdout.write(JSON.stringify({ kind: 'table_begin', table, count: cnt }) + '\n');
       for (let offset = 0; offset < cnt; offset += BATCH) {
-        const q = `MATCH (n:${label}) RETURN n SKIP ${offset} LIMIT ${BATCH}`;
+        // ORDER BY 必须存在：无 ORDER BY 的 SKIP/LIMIT 在图数据库中顺序未定义，分页会漏行或重复
+        const q = `MATCH (n:${label}) RETURN n ORDER BY n.id SKIP ${offset} LIMIT ${BATCH}`;
         const res = await conn.query(q);
         const rows = await res.getAll();
         for (const row of rows) {
@@ -193,6 +194,7 @@ async function run() {
       const q = `
         MATCH (from)-[r:CodeRelation]->(to)
         RETURN from.id AS fromId, to.id AS toId, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.step AS step
+        ORDER BY fromId, toId, type, step, confidence, reason
         SKIP ${offset} LIMIT ${BATCH}
       `;
       const res = await conn.query(q);
@@ -223,7 +225,7 @@ async function run() {
     }
     process.stdout.write(JSON.stringify({ kind: 'emb_begin', count: embCnt }) + '\n');
     for (let offset = 0; offset < embCnt; offset += BATCH) {
-      const q = `MATCH (e:CodeEmbedding) RETURN e SKIP ${offset} LIMIT ${BATCH}`;
+      const q = `MATCH (e:CodeEmbedding) RETURN e ORDER BY e.nodeId SKIP ${offset} LIMIT ${BATCH}`;
       const res = await conn.query(q);
       const rows = await res.getAll();
       for (const row of rows) {
@@ -269,6 +271,7 @@ run();
     assert proc.stdout is not None
     assert proc.stderr is not None
 
+    parse_errors = 0
     for line in proc.stdout:
         line = line.strip()
         if not line:
@@ -276,7 +279,11 @@ run();
         try:
             yield json.loads(line)
         except Exception:
-            continue
+            parse_errors += 1
+            if parse_errors <= 5:
+                _eprintln(f"警告：跳过无法解析的输出行（前 200 字符）：{line[:200]!r}")
+    if parse_errors > 5:
+        _eprintln(f"警告：另有 {parse_errors - 5} 行 JSON 解析失败已跳过")
 
     stderr = proc.stderr.read()
     code = proc.wait()

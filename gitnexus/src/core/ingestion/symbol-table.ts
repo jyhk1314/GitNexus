@@ -7,6 +7,12 @@ export interface SymbolDefinition {
   returnType?: string;
   /** Links Method/Constructor to owning Class/Struct/Trait nodeId */
   ownerId?: string;
+  /**
+   * For C++ Property nodes: the base type name of the field
+   * (e.g. 'TZmdbShmDSN' for `TZmdbShmDSN* m_pShmDSN`).
+   * Stored so call resolution can look up receiver types for member variables.
+   */
+  fieldType?: string;
 }
 
 export interface SymbolTable {
@@ -18,7 +24,7 @@ export interface SymbolTable {
     name: string,
     nodeId: string,
     type: string,
-    metadata?: { parameterCount?: number; returnType?: string; ownerId?: string }
+    metadata?: { parameterCount?: number; returnType?: string; ownerId?: string; fieldType?: string }
   ) => void;
 
   /**
@@ -45,6 +51,12 @@ export interface SymbolTable {
   lookupFuzzy: (name: string) => SymbolDefinition[];
 
   /**
+   * Look up the fieldType of a C++ member variable (Property node) by owner class id and variable name.
+   * Returns the base type name (e.g. 'TZmdbShmDSN') or undefined if not found.
+   */
+  lookupMemberFieldType: (ownerClassId: string, varName: string) => string | undefined;
+
+  /**
    * Debugging: See how many symbols are tracked
    */
   getStats: () => { fileCount: number; globalSymbolCount: number };
@@ -62,12 +74,15 @@ export const createSymbolTable = (): SymbolTable => {
   // SymbolName -> [definitions across files]
   const globalIndex = new Map<string, SymbolDefinition[]>();
 
+  // ownerClassId -> (varName -> fieldType) — for C++ member variable type lookup
+  const memberFieldIndex = new Map<string, Map<string, string>>();
+
   const add = (
     filePath: string,
     name: string,
     nodeId: string,
     type: string,
-    metadata?: { parameterCount?: number; returnType?: string; ownerId?: string }
+    metadata?: { parameterCount?: number; returnType?: string; ownerId?: string; fieldType?: string }
   ) => {
     const def: SymbolDefinition = {
       nodeId,
@@ -76,7 +91,15 @@ export const createSymbolTable = (): SymbolTable => {
       ...(metadata?.parameterCount !== undefined ? { parameterCount: metadata.parameterCount } : {}),
       ...(metadata?.returnType !== undefined ? { returnType: metadata.returnType } : {}),
       ...(metadata?.ownerId !== undefined ? { ownerId: metadata.ownerId } : {}),
+      ...(metadata?.fieldType !== undefined ? { fieldType: metadata.fieldType } : {}),
     };
+
+    // Index C++ member fields for cross-file receiver type resolution
+    if (metadata?.ownerId && metadata?.fieldType) {
+      let ownerMap = memberFieldIndex.get(metadata.ownerId);
+      if (!ownerMap) { ownerMap = new Map(); memberFieldIndex.set(metadata.ownerId, ownerMap); }
+      ownerMap.set(name, metadata.fieldType);
+    }
 
     if (!fileIndex.has(filePath)) {
       fileIndex.set(filePath, new Map());
@@ -113,6 +136,10 @@ export const createSymbolTable = (): SymbolTable => {
     return globalIndex.get(name) || [];
   };
 
+  const lookupMemberFieldType = (ownerClassId: string, varName: string): string | undefined => {
+    return memberFieldIndex.get(ownerClassId)?.get(varName);
+  };
+
   const getStats = () => ({
     fileCount: fileIndex.size,
     globalSymbolCount: globalIndex.size,
@@ -121,7 +148,8 @@ export const createSymbolTable = (): SymbolTable => {
   const clear = () => {
     fileIndex.clear();
     globalIndex.clear();
+    memberFieldIndex.clear();
   };
 
-  return { add, lookupExact, lookupExactFull, lookupExactAllFull, lookupFuzzy, getStats, clear };
+  return { add, lookupExact, lookupExactFull, lookupExactAllFull, lookupFuzzy, lookupMemberFieldType, getStats, clear };
 };

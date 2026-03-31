@@ -335,6 +335,25 @@ export const CPP_QUERIES = `
     declarator: (reference_declarator (function_declarator
       declarator: [(field_identifier) (identifier) (operator_name) (destructor_name)] @name))) @definition.method)
 
+; C++ data member fields (non-function field_declaration inside class/struct body).
+; Captures: plain fields (int x;), pointer fields (Foo* m_foo;), reference fields (Bar& m_bar;).
+; Excludes method declarations (those have function_declarator as declarator child).
+; Also captures: type node as @prop.type for fieldType extraction.
+(field_declaration_list
+  (field_declaration
+    type: (_) @prop.type
+    declarator: (field_identifier) @name) @definition.property)
+(field_declaration_list
+  (field_declaration
+    type: (_) @prop.type
+    declarator: (pointer_declarator
+      declarator: (field_identifier) @name)) @definition.property)
+(field_declaration_list
+  (field_declaration
+    type: (_) @prop.type
+    (reference_declarator
+      (field_identifier) @name)) @definition.property)
+
 ; Templates
 (template_declaration (class_specifier name: (type_identifier) @name body: (field_declaration_list))) @definition.template
 (template_declaration (function_definition declarator: (function_declarator declarator: (identifier) @name))) @definition.template
@@ -343,6 +362,7 @@ export const CPP_QUERIES = `
 (preproc_include path: (_) @import.source) @import
 
 ; Calls
+; Both obj.method() and obj->method() produce field_expression in tree-sitter-cpp
 (call_expression function: (identifier) @call.name) @call
 (call_expression function: (field_expression field: (field_identifier) @call.name)) @call
 (call_expression function: (qualified_identifier name: (identifier) @call.name)) @call

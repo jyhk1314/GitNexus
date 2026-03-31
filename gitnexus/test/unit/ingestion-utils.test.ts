@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getLanguageFromFilename, isBuiltInOrNoise, extractFunctionName } from '../../src/core/ingestion/utils.js';
+import { getLanguageFromFilename, isBuiltInOrNoise, extractFunctionName, cppInClassCallableLabel } from '../../src/core/ingestion/utils.js';
 import { getTreeSitterBufferSize, TREE_SITTER_BUFFER_SIZE, TREE_SITTER_MAX_BUFFER } from '../../src/core/ingestion/constants.js';
 import { SupportedLanguages } from '../../src/config/supported-languages.js';
 import Parser from 'tree-sitter';
@@ -615,6 +615,24 @@ describe('extractFunctionName', () => {
       expect(result.funcName).toBe('inner');
       expect(result.label).toBe('Function');
     });
+  });
+});
+
+describe('cppInClassCallableLabel', () => {
+  it('promotes C++ Function to Method when enclosing class id is set', () => {
+    expect(
+      cppInClassCallableLabel(SupportedLanguages.CPlusPlus, 'Function', 'Class:Foo'),
+    ).toBe('Method');
+  });
+
+  it('leaves Function when no enclosing class', () => {
+    expect(cppInClassCallableLabel(SupportedLanguages.CPlusPlus, 'Function', null)).toBe('Function');
+    expect(cppInClassCallableLabel(SupportedLanguages.CPlusPlus, 'Function', undefined)).toBe('Function');
+  });
+
+  it('does not change Method or other languages', () => {
+    expect(cppInClassCallableLabel(SupportedLanguages.CPlusPlus, 'Method', 'Class:Foo')).toBe('Method');
+    expect(cppInClassCallableLabel(SupportedLanguages.TypeScript, 'Function', 'Class:Foo')).toBe('Function');
   });
 });
 

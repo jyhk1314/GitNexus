@@ -30,6 +30,7 @@ import {
   findEnclosingClassId,
   extractMethodSignature,
   hashCppCallableOverloadSegment,
+  cppInClassCallableLabel,
   countCallArguments,
   inferCallForm,
   extractReceiverName
@@ -84,6 +85,8 @@ interface ParsedSymbol {
   parameterCount?: number;
   returnType?: string;
   ownerId?: string;
+  /** C++ data member: base type name for cross-file receiver resolution */
+  fieldType?: string;
 }
 
 export interface ExtractedImport {
@@ -96,6 +99,8 @@ export interface ExtractedImport {
 
 export interface ExtractedCall {
   filePath: string;
+  /** 1-based line of the call expression (for GITNEXUS_DEBUG_CALLS) */
+  line?: number;
   calledName: string;
   /** generateId of enclosing function, or generateId('File', filePath) for top-level */
   sourceId: string;
@@ -106,6 +111,12 @@ export interface ExtractedCall {
   receiverName?: string;
   /** Resolved type name of the receiver (e.g., 'User' for user.save() when user: User) */
   receiverTypeName?: string;
+  /**
+   * C++ qualified call: the left-hand scope/type name from a qualified_identifier.
+   * e.g. 'Type' for `Type::staticMethod()`, 'NS' for `NS::func()`.
+   * Used to narrow toId candidates to the named class/namespace scope.
+   */
+  qualifierTypeName?: string;
 }
 
 export interface ExtractedHeritage {
@@ -188,17 +199,28 @@ const setLanguage = (language: SupportedLanguages, filePath: string): void => {
 // Enclosing function detection (for call extraction)
 // ============================================================================
 
-/** Walk up AST to find enclosing function, return its generateId or null for top-level */
+/**
+ * Walk up AST to find enclosing function, return its generateId or null for top-level.
+ * C++ class methods must match parsing-processor node ids: `Label:scope:name#overloadHash`.
+ */
 const findEnclosingFunctionId = (node: any, filePath: string, language?: SupportedLanguages): string | null => {
   let current = node.parent;
   while (current) {
     if (FUNCTION_NODE_TYPES.has(current.type)) {
-      const { funcName, label } = extractFunctionName(current);
+      const { funcName, label: extractedLabel } = extractFunctionName(current);
       if (funcName) {
-        // Use the same scope key as nodeId generation: class id when available, filePath otherwise.
         const enclosingClassId = findEnclosingClassId(current, filePath, language);
+        const label = cppInClassCallableLabel(language, extractedLabel, enclosingClassId);
         const scope = enclosingClassId ?? filePath;
-        return generateId(label, `${scope}:${funcName}`);
+        let stem = `${scope}:${funcName}`;
+        if (
+          language === SupportedLanguages.CPlusPlus &&
+          enclosingClassId &&
+          (label === 'Method' || label === 'Constructor')
+        ) {
+          stem = `${stem}#${hashCppCallableOverloadSegment(current)}`;
+        }
+        return generateId(label, stem);
       }
     }
     current = current.parent;
@@ -972,14 +994,33 @@ const processFileGroup = (
             const callForm = inferCallForm(callNode, callNameNode);
             const receiverName = callForm === 'member' ? extractReceiverName(callNameNode) : undefined;
             const receiverTypeName = receiverName ? typeEnv.lookup(receiverName, callNode) : undefined;
+
+            // C++: extract qualifier type from qualified_identifier (e.g. Type::method → 'Type')
+            let qualifierTypeName: string | undefined;
+            if (language === SupportedLanguages.CPlusPlus && callForm === 'free') {
+              const nameParent = callNameNode.parent;
+              if (nameParent?.type === 'qualified_identifier') {
+                const scopeNode = nameParent.childForFieldName('scope');
+                if (scopeNode) {
+                  // scope may be a type_identifier, namespace_identifier, or nested qualified_identifier
+                  const text = scopeNode.type === 'qualified_identifier'
+                    ? scopeNode.lastNamedChild?.text
+                    : scopeNode.text;
+                  if (text && text.length > 0) qualifierTypeName = text;
+                }
+              }
+            }
+
             result.calls.push({
               filePath: file.path,
+              line: callNode.startPosition.row + 1,
               calledName,
               sourceId,
               argCount: countCallArguments(callNode),
               ...(callForm !== undefined ? { callForm } : {}),
               ...(receiverName !== undefined ? { receiverName } : {}),
               ...(receiverTypeName !== undefined ? { receiverTypeName } : {}),
+              ...(qualifierTypeName !== undefined ? { qualifierTypeName } : {}),
             });
           }
         }
@@ -1103,12 +1144,20 @@ const processFileGroup = (
         : generateId(effectiveLabel, nodeIdStem);
 
       let description: string | undefined;
+      let cppPropertyFieldType: string | undefined;
       if (language === SupportedLanguages.PHP) {
         if (nodeLabel === 'Property' && captureMap['definition.property']) {
           description = extractPhpPropertyDescription(nodeName, captureMap['definition.property']) ?? undefined;
         } else if (nodeLabel === 'Method' && captureMap['definition.method']) {
           description = extractEloquentRelationDescription(captureMap['definition.method']) ?? undefined;
         }
+      } else if (language === SupportedLanguages.CPlusPlus && nodeLabel === 'Property' && captureMap['prop.type']) {
+        // C++ data member: encode ownerClassId + fieldType in description as JSON
+        // so that call resolution can look up receiver types for member variables.
+        const rawType = captureMap['prop.type'].text as string;
+        // Normalize: strip pointer/reference/const/volatile qualifiers to get the base type name
+        cppPropertyFieldType = rawType.replace(/\b(const|volatile|mutable|static)\b/g, '').replace(/[*&]/g, '').trim();
+        description = JSON.stringify({ ownerId: enclosingClassId ?? '', fieldType: cppPropertyFieldType });
       }
 
       const frameworkHint = definitionNode
@@ -1159,6 +1208,7 @@ const processFileGroup = (
         ...(parameterCount !== undefined ? { parameterCount } : {}),
         ...(returnType !== undefined ? { returnType } : {}),
         ...(enclosingClassId ? { ownerId: enclosingClassId } : {}),
+        ...(cppPropertyFieldType !== undefined ? { fieldType: cppPropertyFieldType } : {}),
       });
 
       const fileId = generateId('File', file.path);

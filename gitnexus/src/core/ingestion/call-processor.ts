@@ -1,6 +1,7 @@
+import path from 'node:path';
 import { KnowledgeGraph } from '../graph/types.js';
 import { ASTCache } from './ast-cache.js';
-import type { SymbolDefinition } from './symbol-table.js';
+import type { SymbolDefinition, SymbolTable } from './symbol-table.js';
 import Parser from 'tree-sitter';
 import type { ResolutionContext } from './resolution-context.js';
 import { TIER_CONFIDENCE, type ResolutionTier } from './resolution-context.js';
@@ -18,6 +19,10 @@ import {
   inferCallForm,
   extractReceiverName,
   findEnclosingClassId,
+  hashCppCallableOverloadSegment,
+  cppInClassCallableLabel,
+  getCallResolutionDebugMode,
+  getCallResolutionDebugNameFilter,
 } from './utils.js';
 import { buildTypeEnv } from './type-env.js';
 import type { ConstructorBinding } from './type-env.js';
@@ -40,12 +45,36 @@ const findEnclosingFunction = (
 
   while (current) {
     if (FUNCTION_NODE_TYPES.has(current.type)) {
-      const { funcName, label } = extractFunctionName(current);
+      const { funcName, label: extractedLabel } = extractFunctionName(current);
 
       if (funcName) {
+        const lang = getLanguageFromFilename(filePath);
+        const enclosingClassId =
+          lang === SupportedLanguages.CPlusPlus
+            ? findEnclosingClassId(current, filePath, lang)
+            : null;
+        const label = cppInClassCallableLabel(lang, extractedLabel, enclosingClassId);
+        const cppStem =
+          lang === SupportedLanguages.CPlusPlus &&
+          enclosingClassId &&
+          (label === 'Method' || label === 'Constructor')
+            ? `${enclosingClassId}:${funcName}#${hashCppCallableOverloadSegment(current)}`
+            : null;
+
         const resolved = ctx.resolve(funcName, filePath);
         if (resolved?.tier === 'same-file' && resolved.candidates.length > 0) {
-          return resolved.candidates[0].nodeId;
+          if (cppStem) {
+            const expectedId = generateId(label, cppStem);
+            const exact = resolved.candidates.find(c => c.nodeId === expectedId);
+            if (exact) return exact.nodeId;
+          }
+          if (resolved.candidates.length === 1) {
+            return resolved.candidates[0].nodeId;
+          }
+        }
+
+        if (cppStem) {
+          return generateId(label, cppStem);
         }
 
         return generateId(label, `${filePath}:${funcName}`);
@@ -263,17 +292,53 @@ export const processCalls = async (
           ?? verifiedReceivers.get(receiverKey('', receiverName));
       }
 
-      const resolved = resolveCallTarget({
-        calledName,
-        argCount: countCallArguments(callNode),
-        callForm,
-        receiverTypeName,
-      }, file.path, ctx);
+      // C++: extract qualifier type from qualified_identifier (e.g. Type::method → 'Type')
+      let qualifierTypeName: string | undefined;
+      if (callForm === 'free') {
+        const nameParent = nameNode.parent;
+        if (nameParent?.type === 'qualified_identifier') {
+          const scopeNode = nameParent.childForFieldName('scope');
+          if (scopeNode) {
+            const text = scopeNode.type === 'qualified_identifier'
+              ? scopeNode.lastNamedChild?.text
+              : scopeNode.text;
+            if (text && text.length > 0) qualifierTypeName = text;
+          }
+        }
+      }
+
+      const enclosingFuncId = findEnclosingFunction(callNode, file.path, ctx);
+      const rawSourceId = enclosingFuncId || generateId('File', file.path);
+      const sourceId =
+        lang === SupportedLanguages.CPlusPlus
+          ? remapCppCallableSourceId(graph, ctx.symbols, file.path, rawSourceId)
+          : rawSourceId;
+      const callerOwner = tryCppOwnerClassIdFromCallSourceId(sourceId);
+
+      const dbgMode = getCallResolutionDebugMode();
+      const resolved = resolveCallTarget(
+        {
+          calledName,
+          argCount: countCallArguments(callNode),
+          callForm,
+          receiverTypeName,
+          qualifierTypeName,
+        },
+        file.path,
+        ctx,
+        callerOwner,
+        dbgMode === 'off'
+          ? undefined
+          : {
+            filePath: file.path,
+            line: callNode.startPosition.row + 1,
+            sourceId,
+            receiverName,
+          },
+      );
 
       if (!resolved) return;
 
-      const enclosingFuncId = findEnclosingFunction(callNode, file.path, ctx);
-      const sourceId = enclosingFuncId || generateId('File', file.path);
       const relId = generateId('CALLS', `${sourceId}:${calledName}->${resolved.nodeId}`);
 
       graph.addRelationship({
@@ -358,24 +423,137 @@ const toResolveResult = (
   reason: tier === 'same-file' ? 'same-file' : tier === 'import-scoped' ? 'import-resolved' : 'global',
 });
 
+/** Optional row / caller context for `GITNEXUS_DEBUG_CALLS` logs (worker + sequential paths). */
+export interface CallResolutionDebugContext {
+  filePath: string;
+  line?: number;
+  sourceId: string;
+  receiverName?: string;
+}
+
+const formatCandidateBrief = (c: SymbolDefinition): string => {
+  const base = path.basename(c.filePath);
+  return `${c.nodeId} | kind=${c.type} | paramCount=${c.parameterCount ?? 'n/a'} | ownerId=${c.ownerId ?? 'n/a'} | file=${base}`;
+};
+
+const wantCallResolutionLog = (
+  calledName: string,
+  kind: 'entry' | 'failure' | 'success',
+): boolean => {
+  const mode = getCallResolutionDebugMode();
+  if (mode === 'off') return false;
+  const nf = getCallResolutionDebugNameFilter();
+  if (nf && calledName !== nf) return false;
+  if (kind === 'entry' || kind === 'success') return mode === 'all';
+  return true;
+};
+
+const describeResolutionScenario = (
+  call: Pick<ExtractedCall, 'callForm' | 'qualifierTypeName'>,
+): string => {
+  if (call.qualifierTypeName) {
+    return '(1) Type::method / ns::func - qualifierTypeName narrows to class/namespace';
+  }
+  if (call.callForm === 'member') {
+    return '(2)(3) obj.method / ptr->method - narrow via receiver static type (TypeEnv + member-field index)';
+  }
+  return 'unqualified call - tier + arity; optional caller-owner preference';
+};
+
 /**
  * Resolve a function call to its target node ID using priority strategy:
  * A. Narrow candidates by scope tier via ctx.resolve()
  * B. Filter to callable symbol kinds (constructor-aware when callForm is set)
  * C. Apply arity filtering when parameter metadata is available
+ * C2. If C empties the tier but member+receiverTypeName (or qualifierTypeName) is set, widen to
+ *     lookupFuzzy + same arity/kind filter so D/E can disambiguate (same-file wrong-class same-name).
  * D. Apply receiver-type filtering for member calls with typed receivers
+ * E. Apply qualifier-type filtering for C++ qualified calls (Type::method)
  *
  * If filtering still leaves multiple candidates, refuse to emit a CALLS edge.
+ *
+ * Callee lookup uses the **short name** only (`ctx.resolve` / `lookupFuzzy`). The `#…` overload
+ * segment in Method **node ids** is not used as a lookup key (future: class+name then hash tier).
+ *
+ * @param callerOwnerClassId — C++ `Class:Foo` / `Struct:Bar` for the calling method's owner; used to
+ *   disambiguate unqualified calls (`helper()`) when several same-named symbols exist in one file.
  */
 const resolveCallTarget = (
-  call: Pick<ExtractedCall, 'calledName' | 'argCount' | 'callForm' | 'receiverTypeName'>,
+  call: Pick<ExtractedCall, 'calledName' | 'argCount' | 'callForm' | 'receiverTypeName' | 'qualifierTypeName'>,
   currentFile: string,
   ctx: ResolutionContext,
+  callerOwnerClassId?: string,
+  debugCtx?: CallResolutionDebugContext,
 ): ResolveResult | null => {
-  const tiered = ctx.resolve(call.calledName, currentFile);
-  if (!tiered) return null;
+  const { calledName } = call;
+  const mode = getCallResolutionDebugMode();
 
-  const filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount, call.callForm);
+  if (mode === 'all' && wantCallResolutionLog(calledName, 'entry')) {
+    console.log('[gitnexus:call-resolution]', JSON.stringify({
+      event: 'resolve_start',
+      lookupNote: 'Uses short callee name via ctx.resolve/lookupFuzzy; Method id #hash is NOT a lookup key.',
+      scenario: describeResolutionScenario(call),
+      file: path.basename(currentFile),
+      ...debugCtx,
+      calledName,
+      argCount: call.argCount,
+      callForm: call.callForm,
+      receiverTypeName: call.receiverTypeName,
+      qualifierTypeName: call.qualifierTypeName,
+      callerOwnerClassId,
+    }));
+  }
+
+  const fail = (reason: string, extra?: Record<string, unknown>): null => {
+    if (wantCallResolutionLog(calledName, 'failure')) {
+      console.warn('[gitnexus:call-resolution]', JSON.stringify({
+        event: 'resolve_fail',
+        reason,
+        file: path.basename(currentFile),
+        ...debugCtx,
+        calledName,
+        argCount: call.argCount,
+        callForm: call.callForm,
+        receiverTypeName: call.receiverTypeName,
+        qualifierTypeName: call.qualifierTypeName,
+        callerOwnerClassId,
+        scenario: describeResolutionScenario(call),
+        ...extra,
+      }));
+    }
+    return null;
+  };
+
+  const tiered = ctx.resolve(call.calledName, currentFile);
+  if (!tiered) {
+    return fail('ctx.resolve(calledName) returned null - no symbols indexed for this short name');
+  }
+
+  let filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount, call.callForm);
+  if (filteredCandidates.length === 0) {
+    const recoverViaReceiver = call.callForm === 'member' && !!call.receiverTypeName;
+    const recoverViaQualifier = !!call.qualifierTypeName;
+    if (!recoverViaReceiver && !recoverViaQualifier) {
+      return fail('no candidates after callable-kind + arity filter', {
+        tier: tiered.tier,
+        rawTierCount: tiered.candidates.length,
+        rawTierSample: tiered.candidates.slice(0, 12).map(formatCandidateBrief),
+      });
+    }
+    filteredCandidates = filterCallableCandidates(
+      ctx.symbols.lookupFuzzy(call.calledName),
+      call.argCount,
+      call.callForm,
+    );
+    if (filteredCandidates.length === 0) {
+      return fail('no candidates after callable-kind + arity filter (global fuzzy after same-file arity wipe)', {
+        tier: tiered.tier,
+        rawTierCount: tiered.candidates.length,
+        rawTierSample: tiered.candidates.slice(0, 12).map(formatCandidateBrief),
+        recoveryAttempted: recoverViaReceiver ? 'receiver+widen' : 'qualifier+widen',
+      });
+    }
+  }
 
   // D. Receiver-type filtering: for member calls with a known receiver type,
   // resolve the type through the same tiered import infrastructure, then
@@ -386,38 +564,174 @@ const resolveCallTarget = (
   // belong to the wrong class (e.g. super.save() should hit the parent's save,
   // not the child's own save method in the same file).
   if (call.callForm === 'member' && call.receiverTypeName) {
-    // D1. Resolve the receiver type
     const typeResolved = ctx.resolve(call.receiverTypeName, currentFile);
-    if (typeResolved && typeResolved.candidates.length > 0) {
+    if (!typeResolved || typeResolved.candidates.length === 0) {
+      if (mode === 'all' && wantCallResolutionLog(calledName, 'entry')) {
+        console.log('[gitnexus:call-resolution]', JSON.stringify({
+          event: 'trace',
+          msg: 'member call: receiverTypeName present but type not resolved - receiver narrowing skipped',
+          receiverTypeName: call.receiverTypeName,
+          postArityCount: filteredCandidates.length,
+          postAritySample: filteredCandidates.slice(0, 8).map(formatCandidateBrief),
+        }));
+      }
+    } else if (typeResolved.candidates.length > 0) {
       const typeNodeIds = new Set(typeResolved.candidates.map(d => d.nodeId));
       const typeFiles = new Set(typeResolved.candidates.map(d => d.filePath));
 
-      // D2. Widen candidates: same-file tier may miss the parent's method when
-      //     it lives in another file. Query the symbol table directly for all
-      //     global methods with this name, then apply arity/kind filtering.
       const methodPool = filteredCandidates.length <= 1
         ? filterCallableCandidates(ctx.symbols.lookupFuzzy(call.calledName), call.argCount, call.callForm)
         : filteredCandidates;
 
-      // D3. File-based: prefer candidates whose filePath matches the resolved type's file
       const fileFiltered = methodPool.filter(c => typeFiles.has(c.filePath));
       if (fileFiltered.length === 1) {
-        return toResolveResult(fileFiltered[0], tiered.tier);
+        const r = toResolveResult(fileFiltered[0], tiered.tier);
+        if (mode === 'all' && wantCallResolutionLog(calledName, 'success')) {
+          console.log('[gitnexus:call-resolution]', JSON.stringify({
+            event: 'resolve_ok',
+            via: 'receiver_file_match',
+            targetId: r.nodeId,
+            ...debugCtx,
+            calledName,
+          }));
+        }
+        return r;
       }
 
-      // D4. ownerId fallback: narrow by ownerId matching the type's nodeId
       const pool = fileFiltered.length > 0 ? fileFiltered : methodPool;
       const ownerFiltered = pool.filter(c => c.ownerId && typeNodeIds.has(c.ownerId));
       if (ownerFiltered.length === 1) {
-        return toResolveResult(ownerFiltered[0], tiered.tier);
+        const r = toResolveResult(ownerFiltered[0], tiered.tier);
+        if (mode === 'all' && wantCallResolutionLog(calledName, 'success')) {
+          console.log('[gitnexus:call-resolution]', JSON.stringify({
+            event: 'resolve_ok',
+            via: 'receiver_ownerId_match',
+            targetId: r.nodeId,
+            ...debugCtx,
+            calledName,
+          }));
+        }
+        return r;
       }
-      if (fileFiltered.length > 1 || ownerFiltered.length > 1) return null;
+      if (fileFiltered.length > 1 || ownerFiltered.length > 1) {
+        return fail('ambiguous after receiver-type narrowing (class+method not unique; next step: match owner/type then overload hash)', {
+          receiverTypeName: call.receiverTypeName,
+          typeCandidates: typeResolved.candidates.map(c => ({ id: c.nodeId, file: path.basename(c.filePath) })),
+          methodPoolSize: methodPool.length,
+          fileFilteredCount: fileFiltered.length,
+          fileFilteredSample: fileFiltered.map(formatCandidateBrief),
+          ownerFilteredCount: ownerFiltered.length,
+          ownerFilteredSample: ownerFiltered.map(formatCandidateBrief),
+        });
+      }
     }
   }
 
-  if (filteredCandidates.length !== 1) return null;
+  // E. Qualifier-type filtering: for C++ qualified calls (Type::method / NS::func),
+  // treat the qualifier as the receiver type and narrow candidates to that class/namespace.
+  if (call.qualifierTypeName) {
+    const qualResolved = ctx.resolve(call.qualifierTypeName, currentFile);
+    if (!qualResolved || qualResolved.candidates.length === 0) {
+      if (mode === 'all' && wantCallResolutionLog(calledName, 'entry')) {
+        console.log('[gitnexus:call-resolution]', JSON.stringify({
+          event: 'trace',
+          msg: 'qualified call: qualifierTypeName not resolved - qualifier narrowing skipped',
+          qualifierTypeName: call.qualifierTypeName,
+        }));
+      }
+    } else {
+      const qualNodeIds = new Set(qualResolved.candidates.map(d => d.nodeId));
+      const qualFiles = new Set(qualResolved.candidates.map(d => d.filePath));
 
-  return toResolveResult(filteredCandidates[0], tiered.tier);
+      const methodPool = filteredCandidates.length <= 1
+        ? filterCallableCandidates(ctx.symbols.lookupFuzzy(call.calledName), call.argCount, call.callForm)
+        : filteredCandidates;
+
+      const fileFiltered = methodPool.filter(c => qualFiles.has(c.filePath));
+      if (fileFiltered.length === 1) {
+        const r = toResolveResult(fileFiltered[0], tiered.tier);
+        if (mode === 'all' && wantCallResolutionLog(calledName, 'success')) {
+          console.log('[gitnexus:call-resolution]', JSON.stringify({
+            event: 'resolve_ok',
+            via: 'qualifier_file_match',
+            targetId: r.nodeId,
+            ...debugCtx,
+            calledName,
+          }));
+        }
+        return r;
+      }
+
+      const pool = fileFiltered.length > 0 ? fileFiltered : methodPool;
+      const ownerFiltered = pool.filter(c => c.ownerId && qualNodeIds.has(c.ownerId));
+      if (ownerFiltered.length === 1) {
+        const r = toResolveResult(ownerFiltered[0], tiered.tier);
+        if (mode === 'all' && wantCallResolutionLog(calledName, 'success')) {
+          console.log('[gitnexus:call-resolution]', JSON.stringify({
+            event: 'resolve_ok',
+            via: 'qualifier_ownerId_match',
+            targetId: r.nodeId,
+            ...debugCtx,
+            calledName,
+          }));
+        }
+        return r;
+      }
+      if (fileFiltered.length > 1 || ownerFiltered.length > 1) {
+        return fail('ambiguous after qualifier-type narrowing', {
+          qualifierTypeName: call.qualifierTypeName,
+          qualCandidates: qualResolved.candidates.map(c => ({ id: c.nodeId, file: path.basename(c.filePath) })),
+          methodPoolSize: methodPool.length,
+          fileFilteredSample: fileFiltered.map(formatCandidateBrief),
+          ownerFilteredSample: ownerFiltered.map(formatCandidateBrief),
+        });
+      }
+    }
+  }
+
+  // F. C++: prefer callee Method/Constructor owned by the caller's class when multiple
+  //    candidates share the same name (e.g. same .cpp defines A::f and B::f, or `init()` overloads).
+  if (callerOwnerClassId && filteredCandidates.length > 1) {
+    const owned = filteredCandidates.filter(
+      c => c.ownerId === callerOwnerClassId && (c.type === 'Method' || c.type === 'Constructor'),
+    );
+    if (owned.length === 1) {
+      const r = toResolveResult(owned[0], tiered.tier);
+      if (mode === 'all' && wantCallResolutionLog(calledName, 'success')) {
+        console.log('[gitnexus:call-resolution]', JSON.stringify({
+          event: 'resolve_ok',
+          via: 'caller_owner_class',
+          targetId: r.nodeId,
+          ...debugCtx,
+          calledName,
+        }));
+      }
+      return r;
+    }
+  }
+
+  if (filteredCandidates.length !== 1) {
+    return fail(
+      'multiple candidates remain; refusing ambiguous CALLS - narrow with receiver static type, Type::method qualifier, or unique arity/owner metadata',
+      {
+        tier: tiered.tier,
+        finalCount: filteredCandidates.length,
+        finalSample: filteredCandidates.map(formatCandidateBrief),
+      },
+    );
+  }
+
+  const r = toResolveResult(filteredCandidates[0], tiered.tier);
+  if (mode === 'all' && wantCallResolutionLog(calledName, 'success')) {
+    console.log('[gitnexus:call-resolution]', JSON.stringify({
+      event: 'resolve_ok',
+      via: 'single_tier_candidate',
+      targetId: r.nodeId,
+      ...debugCtx,
+      calledName,
+    }));
+  }
+  return r;
 };
 
 // ── Return type text helpers ─────────────────────────────────────────────
@@ -559,10 +873,73 @@ export const extractReturnTypeName = (raw: string): string | undefined => {
 const extractFuncNameFromScope = (scope: string): string =>
   scope.slice(0, scope.indexOf('@'));
 
-/** Extract the trailing function name from a sourceId ("Function:filepath:funcName" → "funcName"). */
+/**
+ * Enclosing symbol name from sourceId (e.g. `Function:a/b.cpp:foo` → `foo`,
+ * `Method:Class:C:bar#deadbeef` → `bar`).
+ */
 const extractFuncNameFromSourceId = (sourceId: string): string => {
   const lastColon = sourceId.lastIndexOf(':');
-  return lastColon >= 0 ? sourceId.slice(lastColon + 1) : '';
+  let tail = lastColon >= 0 ? sourceId.slice(lastColon + 1) : sourceId;
+  const hashIdx = tail.indexOf('#');
+  if (hashIdx >= 0) tail = tail.slice(0, hashIdx);
+  return tail;
+};
+
+/** For C++ member-field lookup: `Method:Class:Owner:fn#…` / `Constructor:…` → `Class:Owner` id. */
+const tryCppOwnerClassIdFromCallSourceId = (sourceId: string): string | undefined => {
+  if (!sourceId.startsWith('Method:') && !sourceId.startsWith('Constructor:')) return undefined;
+  const stem = sourceId.slice(sourceId.indexOf(':') + 1);
+  const stemNoHash = stem.split('#')[0] ?? '';
+  const parts = stemNoHash.split(':');
+  if (parts.length < 3) return undefined;
+  if (parts[0] !== 'Class' && parts[0] !== 'Struct') return undefined;
+  return `${parts[0]}:${parts[1]}`;
+};
+
+/**
+ * When AST-derived id (overload hash) does not match the symbol table / graph node id
+ * (e.g. .h vs .cpp fingerprint drift), remap to a registered node id so Ladybug COPY succeeds.
+ */
+const remapCppCallableSourceId = (
+  graph: KnowledgeGraph,
+  symbols: SymbolTable,
+  filePath: string,
+  sourceId: string,
+): string => {
+  if (graph.getNode(sourceId)) return sourceId;
+
+  const label = sourceId.split(':')[0];
+  if (label !== 'Method' && label !== 'Constructor') return sourceId;
+
+  const rest = sourceId.slice(sourceId.indexOf(':') + 1);
+  const hashIdx = rest.lastIndexOf('#');
+  const stem = hashIdx >= 0 ? rest.slice(0, hashIdx) : rest;
+  const hashSeg = hashIdx >= 0 ? rest.slice(hashIdx + 1) : '';
+
+  const parts = stem.split(':');
+  if (parts.length < 3) return sourceId;
+  if (parts[0] !== 'Class' && parts[0] !== 'Struct') return sourceId;
+  const ownerClassId = `${parts[0]}:${parts[1]}`;
+  const callableName = parts.slice(2).join(':');
+
+  const defs = symbols.lookupExactAllFull(filePath, callableName).filter(
+    d =>
+      d.ownerId === ownerClassId &&
+      (d.type === 'Method' || d.type === 'Constructor'),
+  );
+  if (defs.length === 0) return sourceId;
+
+  if (defs.length === 1) return defs[0].nodeId;
+
+  if (hashSeg) {
+    const byHash = defs.find(d => d.nodeId.endsWith(`#${hashSeg}`));
+    if (byHash) return byHash.nodeId;
+  }
+
+  const inGraph = defs.find(d => graph.getNode(d.nodeId));
+  if (inGraph) return inGraph.nodeId;
+
+  return defs[0].nodeId;
 };
 
 /** Build a scope-aware composite key for receiver type lookup. */
@@ -624,13 +1001,50 @@ export const processCallsFromExtracted = async (
         }
       }
 
-      const resolved = resolveCallTarget(effectiveCall, effectiveCall.filePath, ctx);
+      // C++: cross-TU member variables (declared in .h) — SymbolTable memberFieldIndex, not available in worker TypeEnv
+      if (
+        !effectiveCall.receiverTypeName &&
+        effectiveCall.receiverName &&
+        getLanguageFromFilename(filePath) === SupportedLanguages.CPlusPlus
+      ) {
+        const ownerId = tryCppOwnerClassIdFromCallSourceId(effectiveCall.sourceId);
+        if (ownerId) {
+          const ft = ctx.symbols.lookupMemberFieldType(ownerId, effectiveCall.receiverName);
+          if (ft) {
+            effectiveCall = { ...effectiveCall, receiverTypeName: ft };
+          }
+        }
+      }
+
+      const langFile = getLanguageFromFilename(filePath);
+      let sourceId = effectiveCall.sourceId;
+      if (langFile === SupportedLanguages.CPlusPlus) {
+        sourceId = remapCppCallableSourceId(graph, ctx.symbols, filePath, sourceId);
+      }
+      const callerOwner = tryCppOwnerClassIdFromCallSourceId(sourceId);
+      const callForResolve = sourceId === effectiveCall.sourceId ? effectiveCall : { ...effectiveCall, sourceId };
+
+      const dbgMode = getCallResolutionDebugMode();
+      const resolved = resolveCallTarget(
+        callForResolve,
+        effectiveCall.filePath,
+        ctx,
+        callerOwner,
+        dbgMode === 'off'
+          ? undefined
+          : {
+            filePath,
+            line: effectiveCall.line,
+            sourceId,
+            receiverName: effectiveCall.receiverName,
+          },
+      );
       if (!resolved) continue;
 
-      const relId = generateId('CALLS', `${effectiveCall.sourceId}:${effectiveCall.calledName}->${resolved.nodeId}`);
+      const relId = generateId('CALLS', `${sourceId}:${effectiveCall.calledName}->${resolved.nodeId}`);
       graph.addRelationship({
         id: relId,
-        sourceId: effectiveCall.sourceId,
+        sourceId,
         targetId: resolved.nodeId,
         type: 'CALLS',
         confidence: resolved.confidence,
