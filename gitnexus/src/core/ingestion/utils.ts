@@ -296,6 +296,68 @@ export const CONTAINER_TYPE_TO_LABEL: Record<string, string> = {
   companion_object: 'Class',
 };
 
+/**
+ * C++: from `function_definition` / `function_declaration`, read `Class::method` from the declarator.
+ * Call sites pass the enclosing function node to findEnclosingClassId; without this, out-of-line
+ * definitions yield null (no class_specifier in .cpp), breaking Method sourceId for CALLS.
+ * Uses the same scope rule as the qualified_identifier branch below (Class + scope name text).
+ */
+const findCppCallableQualifiedScopeClassId = (node: any): string | null => {
+  if (!node || !FUNCTION_DECLARATION_TYPES.has(node.type)) return null;
+
+  let declarator =
+    node.childForFieldName?.('declarator') ||
+    node.children?.find((c: any) => c.type === 'function_declarator');
+  while (
+    declarator &&
+    (declarator.type === 'pointer_declarator' || declarator.type === 'reference_declarator')
+  ) {
+    declarator =
+      declarator.childForFieldName?.('declarator') ||
+      declarator.children?.find(
+        (c: any) =>
+          c.type === 'function_declarator' ||
+          c.type === 'pointer_declarator' ||
+          c.type === 'reference_declarator',
+      );
+  }
+  if (!declarator) return null;
+
+  const innerDeclarator =
+    declarator.childForFieldName?.('declarator') ||
+    declarator.children?.find(
+      (c: any) =>
+        c.type === 'qualified_identifier' ||
+        c.type === 'identifier' ||
+        c.type === 'parenthesized_declarator',
+    );
+
+  const scopeFromQualifiedIdentifier = (qi: any): string | null => {
+    if (!qi || qi.type !== 'qualified_identifier') return null;
+    const scopeNode = qi.children?.find(
+      (c: any) =>
+        c.type === 'type_identifier' ||
+        c.type === 'identifier' ||
+        c.type === 'namespace_identifier',
+    );
+    if (scopeNode) return generateId('Class', scopeNode.text);
+    return null;
+  };
+
+  if (innerDeclarator?.type === 'qualified_identifier') {
+    return scopeFromQualifiedIdentifier(innerDeclarator);
+  }
+  if (innerDeclarator?.type === 'parenthesized_declarator') {
+    const nestedId = innerDeclarator.children?.find(
+      (c: any) => c.type === 'qualified_identifier' || c.type === 'identifier',
+    );
+    if (nestedId?.type === 'qualified_identifier') {
+      return scopeFromQualifiedIdentifier(nestedId);
+    }
+  }
+  return null;
+};
+
 /** Walk up AST to find enclosing class/struct/interface/impl, return its generateId or null.
  *  For Go method_declaration nodes, extracts receiver type (e.g. `func (u *User) Save()` → User struct).
  *  For C++ out-of-line definitions (ClassName::method), extracts the scope from qualified_identifier
@@ -315,6 +377,11 @@ export const findEnclosingClassId = (node: any, filePath: string, language?: str
     if (scopeNode) {
       return generateId('Class', scopeNode.text);
     }
+  }
+
+  if (language === SupportedLanguages.CPlusPlus) {
+    const fromDecl = findCppCallableQualifiedScopeClassId(node);
+    if (fromDecl) return fromDecl;
   }
 
   let current = node.parent;

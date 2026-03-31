@@ -184,7 +184,10 @@ describe('C++ member call same-file name collision (arity wipe + fuzzy widen)', 
         c.rel.targetId.includes('TZmdbMgrServiceComm'),
     );
     expect(inner).toBeDefined();
-    expect(inner!.rel.sourceId).toContain('app.cpp');
+    // Caller must be the class-scoped Method id (not Method:app.cpp:SetIPAndPort), so CALLS from
+    // out-of-line definitions share the same source node as parsing.
+    expect(inner!.rel.sourceId).toContain('TZmdbMigration');
+    expect(inner!.rel.sourceId).toMatch(/^Method:Class:TZmdbMigration:SetIPAndPort#/);
   });
 });
 

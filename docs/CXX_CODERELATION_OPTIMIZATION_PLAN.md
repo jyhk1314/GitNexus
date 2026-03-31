@@ -114,7 +114,7 @@
 | 日期 | 说明 |
 |------|------|
 | 2026-03-30 | 初稿：根据 C++ CALLS 缺失问题与三点关键设计整理 |
-| 2026-03-31 | 补充「已落地改造点」与实现说明（见 §8） |
+| 2026-03-31 | 补充「已落地改造点」与实现说明（见 §8）；同日增补 §8.2（类外 **`Class::method`** 体内 **`findEnclosingClassId`** / **`findCppCallableQualifiedScopeClassId`**）与 §8.4（**worker/`dist` 同步**） |
 
 ---
 
@@ -136,6 +136,7 @@
 | Worker 抽取的 `ExtractedCall.sourceId` 曾 **缺少 `#overload` 段**，与图中 Method id 不一致，导致 **CALLS 无法挂在 Method 节点上** | `parse-worker.ts` `findEnclosingFunctionId`：对 C++ 且在 `Class`/`Struct` 内的 **Method/Constructor**，在 stem 末尾追加与解析阶段相同的 `#${hashCppCallableOverloadSegment(...)}` |
 | 类内成员函数在 AST 上常为 **identifier 声明符**，`extractFunctionName` 得到 **Function**，而入库节点为 **Method** → `sourceId` 以 `Function:` 开头，Ladybug **COPY 在 Function 表找不到端点**，`CodeRelation.fromId` 中看不到 Method | `utils.ts` **`cppInClassCallableLabel`**：C++ 且存在 **`enclosingClassId`** 时把 **Function → Method**（与 `parsing-processor` 的 `effectiveLabel` 一致）；`findEnclosingFunctionId` / `findEnclosingFunction` 均使用调整后的 label |
 | 顺序路径 `processCalls` 回退 id 与重载不一致 | `call-processor.ts` `findEnclosingFunction`：优先用 **same-file 符号表** 命中 `expectedId`；否则使用与 worker 相同的 **带重载的 `generateId(label, cppStem)`** |
+| **类外成员函数体**（`.cpp` 中 `void Class::foo() { ... }`）内抽取 CALLS 时，向上找到的是 **`function_definition`**；原 **`findEnclosingClassId`** 仅在 **`node.parent === qualified_identifier`**（适用于 **@name** 捕获点）或 **类体内的 `class_specifier`** 上能拿到所属类，**顶层类外定义** 两条都不成立 → **`enclosingClassId` 为空** → **`cppStem` 无法生成** → 回退为 **`Method:<filePath>:<shortName>`**，与解析阶段 **`Method:Class:<ClassName>:<shortName>#<hash>`** 不一致，**fromId 在图中不存在**、Ladybug COPY 丢边；同 TU **多类同名方法** 时也无法再依赖「`resolve` 仅一候选」的偶然正确。 | `utils.ts` **`findCppCallableQualifiedScopeClassId`**：对 **`function_definition` / `function_declaration`**，按与 **`extractFunctionName`** 相同方式展开 **`function_declarator`**（含指针/引用包装、`parenthesized_declarator`），从 **`qualified_identifier`** 取 scope（**`type_identifier` / `identifier` / `namespace_identifier`**，覆盖 `TZmdbMigration::SetIPAndPort` 等）。在 **`findEnclosingClassId`** 中，**C++** 下于「沿父链找容器」**之前**调用。`call-processor` **`findEnclosingFunction`** 与 **`parse-worker`** **`findEnclosingFunctionId`** 均通过 **`findEnclosingClassId`** 自动对齐。**回归**：`test/integration/resolvers/cpp.test.ts` — *C++ member call same-file name collision* 中断言 **`CALLS.sourceId`** 匹配 **`^Method:Class:TZmdbMigration:SetIPAndPort#`**。 |
 
 ### 8.3 CALLS 的 `toId`（接收者类型与限定名）
 
@@ -157,6 +158,7 @@
 
 - **`extractFuncNameFromSourceId`**：从 `sourceId` 取 **方法名** 时 **去掉 `#` 重载段**，以便与 constructor 验证的 **receiver 映射** 键一致。
 - **Schema**：`RELATION_SCHEMA` 已包含 **`FROM Method TO Method`** 等组合，无需为 Method↔Method CALLS 单独改表结构。
+- **Worker 与 `dist`**：`pipeline.ts` 在存在 **`dist/core/ingestion/workers/parse-worker.js`** 时会加载 **编译后的 worker**（及其依赖的 **`dist/.../utils.js`**）。修改 **`src/core/ingestion/utils.ts`** 等被 worker 引用的模块后，需执行 **`npm run build`**（或保持 `dist` 与 `src` 同步），否则 **parse worker 仍跑旧逻辑**，表现为源码已修但 **CALLS `sourceId` 仍错**。
 
 ### 8.5 仍属边界 / 未覆盖
 

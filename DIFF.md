@@ -92,6 +92,10 @@
 42. **test/fixtures/lang-resolution/** - 未跟踪：`cpp-member-field`、`cpp-qualified-call`、`cpp-member-samefile-name-collide`、`cpp-call-resolution-debug-repro` 等最小复现工程（提交后集成测可移植）**
 43. **gitnexus/debug-*.mjs、gitnexus/scripts/repro-call-resolution-debug.mjs - 未跟踪：本地调用消解调试脚本（可选入库或 .gitignore）**
 44. **gitnexus/test/fixtures/mini-repo/** - 未跟踪：迷你仓库夹具（含 `.claude/skills`、`AGENTS.md`、`CLAUDE.md`）**
+45. **ingestion/utils.ts（追加）- `findCppCallableQualifiedScopeClassId`：对 `function_definition` / `function_declaration` 沿 declarator 解析 `Class::method` 的 `qualified_identifier`（scope 支持 `type_identifier` / `identifier` / `namespace_identifier`，如 `TZmdbMigration::SetIPAndPort`）；`findEnclosingClassId` 在 **C++** 下于「沿父链找 `class_specifier`」**之前**调用，使 **类外成员函数体**内抽取的 CALLS **`fromId`/`sourceId`** 与解析阶段 **`Method:Class:<Name>:<shortName>#<hash>`** 一致，避免回退为 **`Method:<filePath>:<shortName>`** 导致端点不存在、Ladybug **CodeRelation** COPY 丢边；`call-processor` 的 `findEnclosingFunction` 与 `parse-worker` 的 `findEnclosingFunctionId` 经共用 `findEnclosingClassId` 自动受益；设计说明见 `docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md` §8.2**
+46. **test/integration/resolvers/cpp.test.ts（追加）- 场景 `cpp-member-samefile-name-collide`：断言类外方法 `TZmdbMigration::SetIPAndPort` 体内对 `t.SetIPAndPort` 的 CALLS **`rel.sourceId`** 匹配正则 **`^Method:Class:TZmdbMigration:SetIPAndPort#`**（与图中 Method 节点 id 对齐）**
+47. **docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md（修订）- §8.2 增补上表所述根因与实现一行；§8.4 增补修改 worker 依赖源码后须执行 `npm run build` 保持 `dist/.../parse-worker.js` 与 `src` 同步，否则线上仍跑旧 `utils` 逻辑**
+48. **docs/WORKING_TREE_CHANGES_2026-03-31.md（修订）- `utils.ts` / `cpp.test.ts` 表格条目与「建议后续动作」第 4 条（build / dist），与 §47 交叉引用**
 
 #### 六、gitnexus-web/src/lib
 
