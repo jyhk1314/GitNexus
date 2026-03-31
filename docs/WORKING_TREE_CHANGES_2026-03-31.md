@@ -4,7 +4,7 @@
 
 ## 一、改造目标（一句话）
 
-强化 **C++ 场景下 CodeRelation（`CALLS`）** 的 **fromId / toId** 与图中 **Method** 对齐，并补齐 **跨文件成员字段类型**、**限定调用 `Type::m()`**、**同 TU 同名多候选** 等路径；另修正 **图导出分页** 的无序 SKIP/LIMIT 问题。
+强化 **C++ 场景下 CodeRelation（`CALLS`）** 的 **fromId / toId** 与图中 **Method** 对齐，并补齐 **跨文件成员字段类型**、**限定调用 `Type::m()`**、**同 TU 同名多候选** 等路径；另修正 **图导出分页** 的无序 SKIP/LIMIT 问题。后续合入：**C++ 末尾默认实参** 与调用点 **实参个数** 的匹配（**`minimumParameterCount`** + 符号表合并 + **`symbolArityAcceptsArgCount`**，见 [`CXX_CODERELATION_OPTIMIZATION_PLAN.md`](./CXX_CODERELATION_OPTIMIZATION_PLAN.md) §8.6）。
 
 ## 二、已修改文件（`git diff`）
 
@@ -21,6 +21,16 @@
 | `gitnexus/test/unit/ingestion-utils.test.ts` | `cppInClassCallableLabel` 单元测试。 |
 | `gitnexus/test/integration/resolvers/cpp.test.ts` | 集成：`cpp-member-samefile-name-collide`（含 **类外方法** 体内 CALLS 的 **`sourceId`** 断言 **`Method:Class:TZmdbMigration:SetIPAndPort#`**）、`cpp-member-field`、`cpp-qualified-call` 等场景。 |
 | `gitnexus/src/tools/convert_to_csv.py` | 内嵌 JS：节点 / `CodeRelation` / `CodeEmbedding` 分页查询增加 **ORDER BY**，避免 SKIP/LIMIT 顺序未定义；stdout JSON 解析失败统计与告警。 |
+| `gitnexus/src/core/ingestion/utils.ts`（追加） | **`minimumParameterCount`** 与 C++ 末尾默认实参：`cppFormalParameterHasDefault`、`cppMinimumArgCountFromParameterNodes`、`extractMethodSignature` 扩展（见 [`CXX_CODERELATION_OPTIMIZATION_PLAN.md`](./CXX_CODERELATION_OPTIMIZATION_PLAN.md) §8.6）。 |
+| `gitnexus/src/core/ingestion/symbol-table.ts`（追加） | 同 **`nodeId`** 合并时保留 **`minimumParameterCount`**，**`parameterCount`** 取 max（§8.6）。 |
+| `gitnexus/src/core/ingestion/call-processor.ts`（追加） | **`symbolArityAcceptsArgCount`**、**`filterCallableCandidates`** 区间匹配、**`formatCandidateBrief`** 区间展示（§8.6）。 |
+| `gitnexus/src/core/graph/types.ts`（追加） | **`NodeProperties.minimumParameterCount`**。 |
+| `gitnexus/src/core/ingestion/workers/parse-worker.ts`（追加） | 符号与图节点写入 **`minimumParameterCount`**。 |
+| `gitnexus/src/core/ingestion/parsing-processor.ts`（追加） | 顺序路径同上。 |
+| `gitnexus/test/unit/method-signature.test.ts`（追加） | 类内声明 vs 类外定义的 default-args 单测。 |
+| `gitnexus/test/unit/symbol-table.test.ts`（追加） | **`minimumParameterCount`** 合并顺序单测。 |
+| `gitnexus/test/unit/call-processor.test.ts`（追加） | 4 实参 + receiver 唯一 **`Connect`** 单测。 |
+| `docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md`（追加） | **§8.6** 全文与 §7 修订行。 |
 
 ## 三、未跟踪路径（`git status` 中 `??`）
 
@@ -37,7 +47,7 @@
 
 ## 四、与 `DIFF.md` 的关系
 
-根目录 `DIFF.md` 记录与本仓库上游 **v1.4.0** 的累计差异。本节改造已在 `DIFF.md` **第五节**以 **29–44** 号条目收录（C++ CodeRelation 等）；**类外 `Class::method` 体内 `fromId` 根因修复**另见同节 **45–48** 号条目。
+根目录 `DIFF.md` 记录与本仓库上游 **v1.4.0** 的累计差异。**第五节**（`gitnexus/src/core` 等）已 **按文件路径合并**：每个文件至多一行，不再按时间累加多条重复路径；C++ CodeRelation、`fromId`/类外定义、`minimumParameterCount` 等均可在该节对应文件中查到。细节对照见 **§8** 与 **§8.6**。
 
 ## 五、建议后续动作
 

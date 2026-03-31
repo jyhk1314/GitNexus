@@ -65,6 +65,8 @@ export type NodeProperties = {
   entryPointReason?: string,
   // Method signature (for MRO disambiguation)
   parameterCount?: number,
+  /** C++ trailing default args — see SymbolDefinition.minimumParameterCount */
+  minimumParameterCount?: number,
   returnType?: string,
 }
 

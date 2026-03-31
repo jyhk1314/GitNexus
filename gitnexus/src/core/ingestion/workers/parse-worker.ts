@@ -64,6 +64,7 @@ interface ParsedNode {
     astFrameworkReason?: string;
     description?: string;
     parameterCount?: number;
+    minimumParameterCount?: number;
     returnType?: string;
   };
 }
@@ -83,6 +84,7 @@ interface ParsedSymbol {
   nodeId: string;
   type: string;
   parameterCount?: number;
+  minimumParameterCount?: number;
   returnType?: string;
   ownerId?: string;
   /** C++ data member: base type name for cross-file receiver resolution */
@@ -1165,10 +1167,12 @@ const processFileGroup = (
         : null;
 
       let parameterCount: number | undefined;
+      let minimumParameterCount: number | undefined;
       let returnType: string | undefined;
       if (effectiveLabel === 'Function' || effectiveLabel === 'Method' || effectiveLabel === 'Constructor') {
         const sig = extractMethodSignature(definitionNode);
         parameterCount = sig.parameterCount;
+        minimumParameterCount = sig.minimumParameterCount;
         returnType = sig.returnType;
 
         // Language-specific return type fallback (e.g. Ruby YARD @return [Type])
@@ -1196,6 +1200,7 @@ const processFileGroup = (
           } : {}),
           ...(description !== undefined ? { description } : {}),
           ...(parameterCount !== undefined ? { parameterCount } : {}),
+          ...(minimumParameterCount !== undefined ? { minimumParameterCount } : {}),
           ...(returnType !== undefined ? { returnType } : {}),
         },
       });
@@ -1206,6 +1211,7 @@ const processFileGroup = (
         nodeId,
         type: effectiveLabel,
         ...(parameterCount !== undefined ? { parameterCount } : {}),
+        ...(minimumParameterCount !== undefined ? { minimumParameterCount } : {}),
         ...(returnType !== undefined ? { returnType } : {}),
         ...(enclosingClassId ? { ownerId: enclosingClassId } : {}),
         ...(cppPropertyFieldType !== undefined ? { fieldType: cppPropertyFieldType } : {}),

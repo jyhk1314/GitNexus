@@ -115,6 +115,7 @@
 |------|------|
 | 2026-03-30 | 初稿：根据 C++ CALLS 缺失问题与三点关键设计整理 |
 | 2026-03-31 | 补充「已落地改造点」与实现说明（见 §8）；同日增补 §8.2（类外 **`Class::method`** 体内 **`findEnclosingClassId`** / **`findCppCallableQualifiedScopeClassId`**）与 §8.4（**worker/`dist` 同步**） |
+| 2026-03-31 | 增补 §8.6：**C++ 末尾默认实参**与 **`CALLS` 消解的实参个数匹配**（`minimumParameterCount`、符号表合并、`symbolArityAcceptsArgCount`） |
 
 ---
 
@@ -165,3 +166,46 @@
 - **局部变量** 的类类型（§2.2 B）仍主要依赖单文件 `type-env`；未单独建 **Variable** 节点表。
 - **模板、宏、ADL、多继承** 等仍可能无法唯一消解，与 §6 一致。
 - **建议回归**：最小 `.h` + `.cpp` 用例（成员字段 + 类外方法体内 `obj->m()`、`Type::Static()`）在 `test/` 中可做端到端断言（§5 里程碑 5）。
+
+### 8.6 C++ 末尾默认实参与 `CALLS` 实参个数（`minimumParameterCount`）
+
+#### 8.6.1 问题
+
+消解阶段在 **`filterCallableCandidates`** 中曾用 **`parameterCount === argCount`** 过滤候选。C++ 常见模式是：**类内声明**带 **末尾默认实参**（如 `Connect(..., bool bIsAutoCommit=false)`），调用处只传 **4 个实参**；而 **形参个数**在索引里为 **5**。于是 **正确的 `Method` 在 arity 阶段被整批剔除**，`resolve_fail` 的 **`finalSample`** 里只剩其它类上 **恰好为 4 个形参** 的重载，表现为「明明有 `TZmdbLocalDatabase::Connect` 却不在候选列表中」。
+
+根因与 **继承无关**：是 **声明形参个数 / 默认实参** 与 **调用点实参个数** 的匹配规则过严。
+
+#### 8.6.2 方案要点
+
+1. **索引（AST）**  
+   - 在 **`extractMethodSignature`**（`utils.ts`）中，对 **仅含** C/C++ 形式参数节点（`parameter_declaration` / `optional_parameter_declaration`）的参数列表，计算可选字段 **`minimumParameterCount`**：  
+     - 在 **符合「末尾连续默认」** 的前提下，取 **第一个带默认值的形参的下标**，即调用时至少要传的实参个数（可为 `0`）。  
+   - **`cppFormalParameterHasDefault`**：`optional_parameter_declaration`，或 **`parameter_declaration`** 上存在 **`default_value`** 子节点。  
+   - 若出现 **非末尾默认**（非法 C++ 排列），则不设置 `minimumParameterCount`，回退为 **仅精确匹配** `parameterCount`，避免误匹配。
+
+2. **头文件声明 vs 类外定义**  
+   - **类内声明**里 tree-sitter 常用 **`optional_parameter_declaration`** 表示默认实参，可推出 **`minimumParameterCount`**。  
+   - **类外 `Class::Connect(...) { }` 定义**里往往只有 **`parameter_declaration`** 且 **AST 中不含默认值**，单独解析时 **`minimumParameterCount` 为 `undefined`**。  
+   - **`symbol-table.ts` 的 `add`**：对 **同一 `nodeId`（同名重载指纹一致）** 的多次注册执行 **合并**——保留 **`minimumParameterCount`**（`incoming ?? prior`），**`parameterCount`** 取 **`max`**。这样 **先/后** 收录 `.h` 与 `.cpp` 任一顺序均可保留头文件上的 **最少实参个数**。
+
+3. **消解**  
+   - **`call-processor.ts`** 导出 **`symbolArityAcceptsArgCount`**：若存在 **`minimumParameterCount`**，则接受 **`min ≤ argCount ≤ parameterCount`**；否则仍为 **`argCount === parameterCount`**。  
+   - 调试日志 **`formatCandidateBrief`** 中形参个数可显示为区间，如 **`4-5`**。
+
+4. **图与 Worker**  
+   - **`NodeProperties`**（`graph/types.ts`）、**`parse-worker` / `parsing-processor`** 在写入 **Method/Constructor** 时透传可选 **`minimumParameterCount`**（与 **`parameterCount`** 并列）。
+
+#### 8.6.3 实现位置与测试
+
+| 条目 | 位置 |
+|------|------|
+| 签名扩展与 C++ 最小实参个数 | `utils.ts`：`MethodSignature.minimumParameterCount`、`cppFormalParameterHasDefault`、`cppMinimumArgCountFromParameterNodes`、`extractMethodSignature` |
+| 同 `nodeId` 合并 | `symbol-table.ts`：`mergeCallableFields`（在 `add` 内） |
+| 消解 | `call-processor.ts`：`symbolArityAcceptsArgCount`、`filterCallableCandidates` |
+| 流水线写入 | `parse-worker.ts`、`parsing-processor.ts`、`graph/types.ts` |
+| 单元测试 | `test/unit/method-signature.test.ts`（类内 5 形参 + 末尾默认 → `min=4`；类外定义无 `min`）、`test/unit/symbol-table.test.ts`（合并顺序）、`test/unit/call-processor.test.ts`（4 实参 + receiver 收窄 → 唯一 `Connect`） |
+
+#### 8.6.4 边界
+
+- 若工程中 **仅有 `.cpp`**、且 **从未** 用带默认实参的 **声明** 参与索引同一 `nodeId`，则可能仍 **得不到** `minimumParameterCount`，行为与改造前一致。  
+- 非 C++ 形式参数列表（如 TS `required_parameter`）不写入 `minimumParameterCount`，避免误用区间匹配。

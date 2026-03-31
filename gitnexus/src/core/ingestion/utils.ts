@@ -628,7 +628,51 @@ export const getLanguageFromFilename = (filename: string): SupportedLanguages | 
 export interface MethodSignature {
   parameterCount: number | undefined;
   returnType: string | undefined;
+  /**
+   * C/C++: minimum arguments a call may pass when trailing parameters have defaults
+   * (from `optional_parameter_declaration` or `parameter_declaration` with `default_value`).
+   * When set with `parameterCount`, call resolution accepts `min <= argCount <= parameterCount`.
+   * Out-of-line definitions often omit defaults in the AST — merge with header declaration via SymbolTable.
+   */
+  minimumParameterCount?: number;
 }
+
+/** True if this C/C++ formal parameter has a default argument in the AST. */
+export const cppFormalParameterHasDefault = (param: SyntaxNode): boolean => {
+  if (param.type === 'optional_parameter_declaration') return true;
+  if (param.type === 'parameter_declaration') {
+    const dv = param.childForFieldName?.('default_value');
+    if (dv) return true;
+  }
+  return false;
+};
+
+const CPP_FORMAL_PARAM_TYPES = new Set(['parameter_declaration', 'optional_parameter_declaration']);
+
+/** Whether the parameter list uses only C/C++-style formals (not TS `required_parameter`, etc.). */
+const isCppStyleFormalParameterList = (params: readonly SyntaxNode[]): boolean =>
+  params.length > 0 && params.every(p => CPP_FORMAL_PARAM_TYPES.has(p.type));
+
+/**
+ * For C++ trailing-default rules: index of first defaulted parameter = minimum arg count.
+ * Returns undefined when there are no defaults, or when a non-defaulted param follows a defaulted one.
+ */
+export const cppMinimumArgCountFromParameterNodes = (
+  params: readonly SyntaxNode[],
+): number | undefined => {
+  let firstDefaultIndex = -1;
+  for (let i = 0; i < params.length; i++) {
+    const p = params[i]!;
+    const hasDef = cppFormalParameterHasDefault(p);
+    if (hasDef) {
+      if (firstDefaultIndex < 0) firstDefaultIndex = i;
+    } else if (firstDefaultIndex >= 0) {
+      return undefined;
+    }
+  }
+  if (firstDefaultIndex < 0) return undefined;
+  return firstDefaultIndex;
+};
 
 const CPP_PARAM_LIST_TYPES = new Set([
   'formal_parameters', 'parameters', 'parameter_list',
@@ -703,6 +747,7 @@ const CALL_ARGUMENT_LIST_TYPES = new Set([
  */
 export const extractMethodSignature = (node: SyntaxNode | null | undefined): MethodSignature => {
   let parameterCount: number | undefined = 0;
+  let minimumParameterCount: number | undefined;
   let returnType: string | undefined;
   let isVariadic = false;
 
@@ -739,6 +784,8 @@ export const extractMethodSignature = (node: SyntaxNode | null | undefined): Met
         ?? findParameterList(node)
   );
 
+  const countableParams: SyntaxNode[] = [];
+
   if (parameterList && paramListTypes.has(parameterList.type)) {
     for (const param of parameterList.namedChildren) {
       if (param.type === 'comment') continue;
@@ -768,6 +815,7 @@ export const extractMethodSignature = (node: SyntaxNode | null | undefined): Met
           isVariadic = true;
         }
       }
+      countableParams.push(param);
       parameterCount++;
     }
     // C/C++: bare `...` token in parameter list (not a named child — check all children)
@@ -835,9 +883,19 @@ export const extractMethodSignature = (node: SyntaxNode | null | undefined): Met
     }
   }
 
-  if (isVariadic) parameterCount = undefined;
+  if (isVariadic) {
+    parameterCount = undefined;
+    minimumParameterCount = undefined;
+  } else if (
+    parameterCount !== undefined &&
+    countableParams.length > 0 &&
+    isCppStyleFormalParameterList(countableParams)
+  ) {
+    const minArgs = cppMinimumArgCountFromParameterNodes(countableParams);
+    if (minArgs !== undefined) minimumParameterCount = minArgs;
+  }
 
-  return { parameterCount, returnType };
+  return { parameterCount, returnType, minimumParameterCount };
 };
 
 /**

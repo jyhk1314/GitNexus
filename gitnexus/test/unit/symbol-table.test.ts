@@ -136,6 +136,37 @@ describe('SymbolTable', () => {
     });
   });
 
+  describe('minimumParameterCount merge (C++ decl + definition)', () => {
+    it('keeps minimumParameterCount when a later registration omits it', () => {
+      table.add('hdr.h', 'Connect', 'Method:Class:C:Connect#abc', 'Method', {
+        parameterCount: 5,
+        minimumParameterCount: 4,
+        ownerId: 'Class:C',
+      });
+      table.add('impl.cpp', 'Connect', 'Method:Class:C:Connect#abc', 'Method', {
+        parameterCount: 5,
+        ownerId: 'Class:C',
+      });
+      const defs = table.lookupFuzzy('Connect');
+      expect(defs).toHaveLength(1);
+      expect(defs[0].minimumParameterCount).toBe(4);
+      expect(defs[0].parameterCount).toBe(5);
+    });
+
+    it('applies minimumParameterCount when header is registered after the .cpp definition', () => {
+      table.add('impl.cpp', 'Connect', 'Method:Class:C:Connect#abc', 'Method', {
+        parameterCount: 5,
+        ownerId: 'Class:C',
+      });
+      table.add('hdr.h', 'Connect', 'Method:Class:C:Connect#abc', 'Method', {
+        parameterCount: 5,
+        minimumParameterCount: 4,
+        ownerId: 'Class:C',
+      });
+      expect(table.lookupFuzzy('Connect')[0].minimumParameterCount).toBe(4);
+    });
+  });
+
   describe('clear', () => {
     it('resets all state', () => {
       table.add('src/a.ts', 'foo', 'func:foo', 'Function');

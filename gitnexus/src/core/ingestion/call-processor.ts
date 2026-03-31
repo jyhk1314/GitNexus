@@ -384,6 +384,23 @@ const CALLABLE_SYMBOL_TYPES = new Set([
 
 const CONSTRUCTOR_TARGET_TYPES = new Set(['Constructor', 'Class', 'Struct', 'Record']);
 
+/**
+ * Whether a call site with `argCount` arguments can invoke this symbol, given optional
+ * `parameterCount` / `minimumParameterCount` from the indexer (C++ trailing defaults).
+ */
+export const symbolArityAcceptsArgCount = (
+  candidate: SymbolDefinition,
+  argCount: number,
+): boolean => {
+  const max = candidate.parameterCount;
+  if (max === undefined) return true;
+  const min = candidate.minimumParameterCount;
+  if (min !== undefined) {
+    return argCount >= min && argCount <= max;
+  }
+  return argCount === max;
+};
+
 const filterCallableCandidates = (
   candidates: readonly SymbolDefinition[],
   argCount?: number,
@@ -409,9 +426,7 @@ const filterCallableCandidates = (
   const hasParameterMetadata = kindFiltered.some(candidate => candidate.parameterCount !== undefined);
   if (!hasParameterMetadata) return kindFiltered;
 
-  return kindFiltered.filter(candidate =>
-    candidate.parameterCount === undefined || candidate.parameterCount === argCount
-  );
+  return kindFiltered.filter(candidate => symbolArityAcceptsArgCount(candidate, argCount));
 };
 
 const toResolveResult = (
@@ -433,7 +448,11 @@ export interface CallResolutionDebugContext {
 
 const formatCandidateBrief = (c: SymbolDefinition): string => {
   const base = path.basename(c.filePath);
-  return `${c.nodeId} | kind=${c.type} | paramCount=${c.parameterCount ?? 'n/a'} | ownerId=${c.ownerId ?? 'n/a'} | file=${base}`;
+  const pc = c.parameterCount;
+  const pmin = c.minimumParameterCount;
+  const paramStr =
+    pc === undefined ? 'n/a' : pmin !== undefined ? `${pmin}-${pc}` : String(pc);
+  return `${c.nodeId} | kind=${c.type} | paramCount=${paramStr} | ownerId=${c.ownerId ?? 'n/a'} | file=${base}`;
 };
 
 const wantCallResolutionLog = (

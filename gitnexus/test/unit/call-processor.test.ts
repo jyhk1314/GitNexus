@@ -333,6 +333,38 @@ describe('processCallsFromExtracted', () => {
     expect(rels).toHaveLength(0);
   });
 
+  it('C++ trailing defaults: 4-arg call matches 5-param method when minimumParameterCount is 4', async () => {
+    ctx.symbols.add('lib/TZmdbLocalDatabase.h', 'TZmdbLocalDatabase', 'Class:TZmdbLocalDatabase', 'Class');
+    ctx.symbols.add('lib/TZmdbLocalDatabase.h', 'Connect', 'Method:Class:TZmdbLocalDatabase:Connect#x', 'Method', {
+      parameterCount: 5,
+      minimumParameterCount: 4,
+      ownerId: 'Class:TZmdbLocalDatabase',
+    });
+    ctx.symbols.add('other/A.cpp', 'Connect', 'Method:Class:A:Connect#y', 'Method', {
+      parameterCount: 4,
+      ownerId: 'Class:A',
+    });
+    ctx.symbols.add('other/B.cpp', 'Connect', 'Method:Class:B:Connect#z', 'Method', {
+      parameterCount: 4,
+      ownerId: 'Class:B',
+    });
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'cfg/ZmdbAutoCfg.cpp',
+      calledName: 'Connect',
+      sourceId: 'Method:Class:TZmdbAutoCfg:SetUserInfo',
+      argCount: 4,
+      callForm: 'member',
+      receiverTypeName: 'TZmdbLocalDatabase',
+    }];
+
+    await processCallsFromExtracted(graph, calls, ctx);
+
+    const rels = graph.relationships.filter(r => r.type === 'CALLS');
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetId).toBe('Method:Class:TZmdbLocalDatabase:Connect#x');
+  });
+
   // ---- Return type inference (Phase 4) ----
 
   it('return type inference: binds variable to return type of callee', async () => {

@@ -3,6 +3,8 @@ export interface SymbolDefinition {
   filePath: string;
   type: string; // 'Function', 'Class', etc.
   parameterCount?: number;
+  /** C++ trailing default args: accept call argCount in [minimumParameterCount, parameterCount] */
+  minimumParameterCount?: number;
   /** Raw return type text extracted from AST (e.g. 'User', 'Promise<User>') */
   returnType?: string;
   /** Links Method/Constructor to owning Class/Struct/Trait nodeId */
@@ -24,7 +26,13 @@ export interface SymbolTable {
     name: string,
     nodeId: string,
     type: string,
-    metadata?: { parameterCount?: number; returnType?: string; ownerId?: string; fieldType?: string }
+    metadata?: {
+      parameterCount?: number;
+      minimumParameterCount?: number;
+      returnType?: string;
+      ownerId?: string;
+      fieldType?: string;
+    }
   ) => void;
 
   /**
@@ -82,13 +90,36 @@ export const createSymbolTable = (): SymbolTable => {
     name: string,
     nodeId: string,
     type: string,
-    metadata?: { parameterCount?: number; returnType?: string; ownerId?: string; fieldType?: string }
+    metadata?: {
+      parameterCount?: number;
+      minimumParameterCount?: number;
+      returnType?: string;
+      ownerId?: string;
+      fieldType?: string;
+    }
   ) => {
-    const def: SymbolDefinition = {
+    const mergeCallableFields = (incoming: SymbolDefinition, prior: SymbolDefinition): SymbolDefinition => {
+      const next: SymbolDefinition = { ...incoming };
+      next.minimumParameterCount = incoming.minimumParameterCount ?? prior.minimumParameterCount;
+      if (incoming.parameterCount !== undefined && prior.parameterCount !== undefined) {
+        next.parameterCount = Math.max(incoming.parameterCount, prior.parameterCount);
+      } else {
+        next.parameterCount = incoming.parameterCount ?? prior.parameterCount;
+      }
+      if (prior.returnType && !incoming.returnType) next.returnType = prior.returnType;
+      if (prior.ownerId && !incoming.ownerId) next.ownerId = prior.ownerId;
+      if (prior.fieldType && !incoming.fieldType) next.fieldType = prior.fieldType;
+      return next;
+    };
+
+    let def: SymbolDefinition = {
       nodeId,
       filePath,
       type,
       ...(metadata?.parameterCount !== undefined ? { parameterCount: metadata.parameterCount } : {}),
+      ...(metadata?.minimumParameterCount !== undefined
+        ? { minimumParameterCount: metadata.minimumParameterCount }
+        : {}),
       ...(metadata?.returnType !== undefined ? { returnType: metadata.returnType } : {}),
       ...(metadata?.ownerId !== undefined ? { ownerId: metadata.ownerId } : {}),
       ...(metadata?.fieldType !== undefined ? { fieldType: metadata.fieldType } : {}),
@@ -108,12 +139,21 @@ export const createSymbolTable = (): SymbolTable => {
     if (!nameMap.has(name)) {
       nameMap.set(name, []);
     }
+    const gList = globalIndex.get(name) ?? [];
+    const priorGlobal = gList.find(d => d.nodeId === def.nodeId);
+    if (priorGlobal) {
+      def = mergeCallableFields(def, priorGlobal);
+    }
+
     const fileSyms = nameMap.get(name)!;
     const dupIdx = fileSyms.findIndex(d => d.nodeId === def.nodeId);
-    if (dupIdx >= 0) fileSyms[dupIdx] = def;
-    else fileSyms.push(def);
+    if (dupIdx >= 0) {
+      def = mergeCallableFields(def, fileSyms[dupIdx]!);
+      fileSyms[dupIdx] = def;
+    } else {
+      fileSyms.push(def);
+    }
 
-    const gList = globalIndex.get(name) ?? [];
     const gFiltered = gList.filter(d => d.nodeId !== def.nodeId);
     gFiltered.push(def);
     globalIndex.set(name, gFiltered);

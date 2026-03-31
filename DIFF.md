@@ -1,6 +1,8 @@
 # Difflog
 
-本文档记录当前仓库版本与原分支的差异点, 部分个性化需求不会再往原分支主动同步
+本文档记录当前仓库版本与原分支的差异点, 部分个性化需求不会再往原分支主动同步。
+
+**撰写约定：** 同一逻辑路径（文件/目录）在文中 **只出现一条**，该文件的多轮改动合并为 **一段说明**（用分号或逗号串联），避免同一文件名反复占多条编号。
 
 ## 与 https://github.com/abhigyanpatwari/GitNexus v1.4.0 差异内容分析:
 
@@ -16,17 +18,8 @@
 
 **核心功能增强及新增API端点：**
 
-1. **api.ts - 表名转义处理，添加BACKTICK_TABLES集合和escapeTableName函数，确保Cypher查询中特殊表名（Struct、Enum、Macro等）能正确执行**
-2. **api.ts - createServer函数增强，新增embeddings选项参数，支持在启动时启用embeddings功能**
-3. **api.ts - POST /api/repos/clone-analyze，一键克隆并分析仓库，支持token认证、分支指定、流式响应、UTF-8编码转换、智能进度跟踪、已存在场景处理**
-4. **api.ts - POST /api/repos/zip-upload-analyze，ZIP上传并分析，支持最大500MB、自动处理单层目录、自动git init、UTF-8编码转换、流式响应**
-5. **api.ts - GET/POST /api/proxy，Git代理服务，为Web端Local Git提供代理转发解决跨域和鉴权问题**
-6. **api.ts - 数据库连接管理，分析完成后调用closeLbugForPath释放文件锁，避免后台服务持有数据库连接**
-7. **api.ts - 导入依赖扩展，新增文件系统操作、进程管理、ZIP处理等功能**
-8. **api.ts - 错误处理和日志优化，更详细的错误处理、过滤噪音日志、完善流式响应错误处理**
-9. **api.ts - 路径处理工具函数，getCodeBaseDir、getCodeDir、getRepoNameFromUrl、pathEquals等跨平台路径处理**
-10. **mcp-http.ts - DELETE /api/mcp/sessions/:sessionId，手动清理 MCP session 接口，支持按 sessionId 关闭并移除会话，成功返回 204，不存在返回 404**
-11. **api.ts - 混合搜索分支使用 await isEmbedderReady()，与异步嵌入就绪检查对齐**
+1. **api.ts** — 表名转义（`BACKTICK_TABLES`、`escapeTableName`）；`createServer` 支持 embeddings；`POST /api/repos/clone-analyze`（克隆分析、token/分支、流式、UTF-8、进度、已存在处理）；`POST /api/repos/zip-upload-analyze`（ZIP≤500MB、单层目录、git init、流式）；`GET|POST /api/proxy`（Git 代理）；分析完成 `closeLbugForPath`；扩展 fs/进程/ZIP 等依赖；错误与流式日志；路径工具 `getCodeBaseDir`、`getCodeDir`、`getRepoNameFromUrl`、`pathEquals`；混合搜索分支 `await isEmbedderReady()`。
+2. **mcp-http.ts** — `DELETE /api/mcp/sessions/:sessionId` 清理 MCP session（204/404）。
 
 #### 三、gitnexus/src/mcp/core
 
@@ -46,56 +39,47 @@
 
 #### 五、gitnexus/src/core
 
-**C++解析优化及核心模块增强：**
+**C++解析优化及核心模块增强：** 下列 **每个编号对应一条路径**（同一文件的多次改动已合并为一行）。未写前缀的路径相对于 **`gitnexus/src/core/`**；`docs/`、`AGENTS.md`、`CLAUDE.md`、`gitnexus/src/tools/`、`gitnexus/test/` 等从 **仓库根** 起算。
 
-1. **embeddings/embedder.ts - 中文本地化支撑，添加Hugging Face镜像站配置（hf-mirror.com），避免直连慢或不可用；isEmbedderReady 改为 async，内部 initEmbedder 与 createVectorIndex 后再返回是否就绪（每次 semanticSearch 会 await，依赖底层幂等；若延迟敏感可后续做就绪缓存）**
-2. **ingestion/community-processor.ts - 社区检测优化，扩展通用目录过滤列表，新增app和helper目录名**
-3. **ingestion/constants.ts - Tree-sitter缓冲区大小优化，从512KB提升到2MB，避免跳过较大文件**
-4. **ingestion/filesystem-walker.ts - 文件大小限制优化，从512KB提升到2MB**
-5. **lbug/lbug-adapter.ts - 数据库适配器，包含closeLbugForPath、getEmbeddingTableName、BACKTICK_TABLES、escapeTableName等功能；queryFTS/createFTSIndex 路径 ensure loadFTSExtension()，模块级 ftsLoaded 幂等**
-6. **ingestion/parsing-processor.ts - 进度优化, 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：将enclosingClassId计算移至nodeId生成之前，有enclosingClassId时用其替代filePath作为scope key，使.h声明和.cpp定义合并为同一图节点；类作用域 Method/Constructor 的 nodeId 在 `scope:name` 后追加 `#` + `hashCppCallableOverloadSegment`（仅各形参 type 子树指纹，SHA256 截断 12 位），区分重载且头/源默认实参声明与定义仍可 id 一致；C++ Function节点有所属类时label提升为Method；C++ class/struct节点使用不含filePath的id；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
-7. **ingestion/pipeline.ts - 进度优化**
-8. **lbug/csv-generator.ts - 文件截断大小优化；FileContentCache 默认 maxSize=3000 及最大缓存节点数注释；File 节点导出内容上限 MAX_FILE_CONTENT 200000→600000**
-9. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; C++ CPP_QUERIES补全类内方法声明捕获：修复field_declaration规则中identifier→field_identifier/operator_name，新增pointer_declarator包裹的返回指针方法规则，新增类内析构函数declaration规则；field_declaration_list 内补全「指针/双重指针/引用返回且带函数体」的内联成员 function_definition 捕获（与文件域模式对齐）**
-10. **ingestion/workers/parse-worker.ts - 解决C++构造函数识别成Function的问题; C++ 排除函数声明：AST node type 为 declaration 时跳过，仅保留 function_definition；C++ HAS_METHOD关系完整性修复：enclosingClassId提前计算，nodeId scope改为class-scoped；类作用域 Method/Constructor 同步追加 `#` + `hashCppCallableOverloadSegment` 重载段（与 parsing-processor 一致）；effectiveLabel机制（Function→Method提升）；findEnclosingFunctionId同步使用class-scoped id；C++ class/struct使用不含filePath的nodeId；C++解析前预处理：strip class/struct前的导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT）**
-11. **ingestion/utils.ts - C++ HAS_METHOD关系完整性修复：findEnclosingClassId新增qualified_identifier处理，从out-of-line方法定义（ClassName::method）的scope提取类名，返回不含filePath的classId；类内方法的classId也改为不含filePath，使.h和.cpp两侧id一致；新增 `hashCppCallableOverloadSegment` / `cppParameterListFingerprint`：仅拼接各形参 `type` 子树文本（规范化空白），忽略形参名与默认实参，兼容 `parameter_declaration` 与 `optional_parameter_declaration`，供类作用域 Method/Constructor 的 nodeId 重载消歧**
-12. **ingestion/call-processor.ts - C++ HAS_METHOD关系完整性修复：Laravel路由猜测的guessedId改为用controller的nodeId（classId）作为scope，与class-scoped nodeId方案保持一致；C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
-13. **ingestion/cpp-export-macro-preprocess.ts - 新增文件，C++解析前strip导出宏（DLL_API、DLL_SQLPARSE_API、DLLEXPORT），解决tree-sitter-cpp无法解析class MACRO Type的问题，preprocessCppExportMacros供parse-worker、parsing-processor、call-processor、heritage-processor、import-processor调用**
-14. **ingestion/heritage-processor.ts - C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
-15. **ingestion/import-processor.ts - C++解析前预处理：缓存未命中时strip class/struct前的导出宏**
-16. **embeddings/embedding-pipeline.ts - 导出 createVectorIndex；semanticSearch 入口 await isEmbedderReady()**
-17. **embeddings/types.ts - maxSnippetLength 配置项注释（片段长度与算力权衡）**
-18. **search/hybrid-search.ts - mergeWithRRF：同一路径已写入语义元数据时，后续语义命中只累加 RRF 分，不覆盖 semanticScore、nodeId、行号等**
-19. **graph/graph.ts - C++ Method/Constructor 同 id 合并策略优化：后写入若来自 `.cpp`/`.cc`/`.cxx` 且 `language=cpp`，则覆盖图中已有节点（含早前 `.h` 或另一 `.cpp`）；重载在解析层通过参数类型指纹区分 id；`nodeId` 不变时 `HAS_METHOD` 仍指向同一方法节点；非 C++ 或其它标签仍为「先写入者优先」**
-20. **ingestion/pipeline.ts - 解析顺序可观测：满足 `GITNEXUS_LOG_PARSE_ORDER` 或与 clone-analyze 一致的 `GITNEXUS_PROGRESS` 时，写入 `<repo>/.gitnexus/parse-order.log`（含 chunk 范围注释）；`GITNEXUS_LOG_PARSE_ORDER=0` 可显式关闭；stderr 输出绝对路径便于 serve/clone-analyze 排查**
-21. **test/unit/graph.test.ts - 覆盖 C++ 实现文件覆盖声明侧节点、`.cc`/`.cxx` 后缀，及「两个 `.cpp` 同 id 时后者覆盖」**
-22. **ingestion/symbol-table.ts - 同文件同名支持多条定义（重载）：fileIndex 改为 `SymbolName → SymbolDefinition[]`；新增 `lookupExactAllFull`；`add` 同 `nodeId` 时替换条目；`lookupExact` / `lookupExactFull` 返回列表首条以兼容原语义；globalIndex 按 `nodeId` 去重更新**
-23. **ingestion/resolution-context.ts - 同文件权威层（Tier 1）改用 `lookupExactAllFull`，候选返回该文件内同名全部定义，支撑重载解析**
-24. **docs/CXX_METHOD_MERGE_AND_PARSE_ORDER.md - 设计与实现对齐说明：nodeId 含参数类型指纹、`.cpp` 后写入覆盖规则、HAS_METHOD 重载多条、`CALLS` 与 `lookupExactAllFull` 关系、单测/集成测索引**
-25. **test/unit/method-signature.test.ts - `hashCppCallableOverloadSegment`：重载分段不同、空参稳定、默认实参声明与无默认定义指纹一致、类内 `optional_parameter` 与类外 `function_definition` 一致**
-26. **test/integration/tree-sitter-languages.test.ts - 类内指针/双重指针/引用返回且带函数体的成员方法捕获**
-27. **test/unit/symbol-table.test.ts - 同文件同名多 overload 保留与 `lookupExactAllFull` 长度断言**
-28. **test/unit/type-env.test.ts - Mock SymbolTable 补充 `lookupExactAllFull`**
-29. **ingestion/tree-sitter-queries.ts（追加）- CPP_QUERIES 新增类体内非函数 `field_declaration` 数据成员捕获（普通/指针/引用 declarator）、`@prop.type`；注释说明 `obj.method` 与 `obj->method` 均对应 field_expression**
-30. **ingestion/parsing-processor.ts（追加）- C++ Property：`description` JSON（`ownerId`、归一化 `fieldType`）；符号表注册 `fieldType`；worker 合并路径透传 `fieldType`**
-31. **ingestion/symbol-table.ts（追加）- `memberFieldIndex`（`ownerClassId`×字段名→`fieldType`）；`lookupMemberFieldType`；`SymbolDefinition` / `add` 元数据支持 `fieldType`**
-32. **ingestion/type-env.ts - `lookupWithMemberFields`：单文件 `lookupInEnv` 未命中时，按外围类名查 Class/Struct 再 `lookupMemberFieldType`，跨文件补成员变量静态类型（如 .h 声明、.cpp 方法体内使用）**
-33. **ingestion/utils.ts（追加）- `cppInClassCallableLabel`（类内 `Function`→`Method` 与 ingest 一致）；`getCallResolutionDebugMode` / `getCallResolutionDebugNameFilter`（环境变量 `GITNEXUS_DEBUG_CALLS`、`GITNEXUS_DEBUG_CALLS_NAME`）**
-34. **ingestion/workers/parse-worker.ts（追加）- `findEnclosingFunctionId` 对 C++ 类内 Method/Constructor 追加 `#hashCppCallableOverloadSegment` 与 `cppInClassCallableLabel`；`ExtractedCall` 增加 `line`、`qualifierTypeName`；C++ Property 与顺序路径一致的 `description`/`fieldType`**
-35. **ingestion/call-processor.ts（扩展）- C++ CALLS：`processCalls` 先解析调用方再 `resolveCallTarget`；`remapCppCallableSourceId`；`resolveCallTarget` 支持 `qualifierTypeName` 收窄、`callerOwnerClassId` 多候选时优先同 `ownerId`；`lookupMemberFieldType` 补全 member 调用的 `receiverTypeName`；顺序路径抽取限定名与调试日志**
-36. **test/unit/ingestion-utils.test.ts - `cppInClassCallableLabel` 单测**
-37. **test/integration/resolvers/cpp.test.ts - 集成：同文件短名碰撞（`cpp-member-samefile-name-collide`）、跨文件成员字段（`cpp-member-field`）、限定调用（`cpp-qualified-call`）**
-38. **src/tools/convert_to_csv.py - 内嵌导出脚本：节点 / CodeRelation / CodeEmbedding 分页 MATCH 增加 ORDER BY（稳定 SKIP/LIMIT）；stdout JSON 行解析失败计数与 stderr 告警**
-39. **AGENTS.md / CLAUDE.md - GitNexus 索引统计数字更新**
-40. **docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md - C++ CodeRelation（CALLS）优化方案与 §8 已落地实现对照**
-41. **docs/WORKING_TREE_CHANGES_2026-03-31.md - 工作区未提交改造摘要（与本文档第五节新增条目交叉引用）**
-42. **test/fixtures/lang-resolution/** - 未跟踪：`cpp-member-field`、`cpp-qualified-call`、`cpp-member-samefile-name-collide`、`cpp-call-resolution-debug-repro` 等最小复现工程（提交后集成测可移植）**
-43. **gitnexus/debug-*.mjs、gitnexus/scripts/repro-call-resolution-debug.mjs - 未跟踪：本地调用消解调试脚本（可选入库或 .gitignore）**
-44. **gitnexus/test/fixtures/mini-repo/** - 未跟踪：迷你仓库夹具（含 `.claude/skills`、`AGENTS.md`、`CLAUDE.md`）**
-45. **ingestion/utils.ts（追加）- `findCppCallableQualifiedScopeClassId`：对 `function_definition` / `function_declaration` 沿 declarator 解析 `Class::method` 的 `qualified_identifier`（scope 支持 `type_identifier` / `identifier` / `namespace_identifier`，如 `TZmdbMigration::SetIPAndPort`）；`findEnclosingClassId` 在 **C++** 下于「沿父链找 `class_specifier`」**之前**调用，使 **类外成员函数体**内抽取的 CALLS **`fromId`/`sourceId`** 与解析阶段 **`Method:Class:<Name>:<shortName>#<hash>`** 一致，避免回退为 **`Method:<filePath>:<shortName>`** 导致端点不存在、Ladybug **CodeRelation** COPY 丢边；`call-processor` 的 `findEnclosingFunction` 与 `parse-worker` 的 `findEnclosingFunctionId` 经共用 `findEnclosingClassId` 自动受益；设计说明见 `docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md` §8.2**
-46. **test/integration/resolvers/cpp.test.ts（追加）- 场景 `cpp-member-samefile-name-collide`：断言类外方法 `TZmdbMigration::SetIPAndPort` 体内对 `t.SetIPAndPort` 的 CALLS **`rel.sourceId`** 匹配正则 **`^Method:Class:TZmdbMigration:SetIPAndPort#`**（与图中 Method 节点 id 对齐）**
-47. **docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md（修订）- §8.2 增补上表所述根因与实现一行；§8.4 增补修改 worker 依赖源码后须执行 `npm run build` 保持 `dist/.../parse-worker.js` 与 `src` 同步，否则线上仍跑旧 `utils` 逻辑**
-48. **docs/WORKING_TREE_CHANGES_2026-03-31.md（修订）- `utils.ts` / `cpp.test.ts` 表格条目与「建议后续动作」第 4 条（build / dist），与 §47 交叉引用**
+1. **AGENTS.md / CLAUDE.md** — GitNexus 索引统计数字更新。
+2. **docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md** — C++ CodeRelation（CALLS）方案与 §8 落地对照；§8.2（类外 `Class::method` / `findCppCallableQualifiedScopeClassId`）、§8.4（改 worker 依赖源码后须 `npm run build` 同步 `dist`）、§8.6（末尾默认实参、`minimumParameterCount`、§7 修订记录）。
+3. **docs/CXX_METHOD_MERGE_AND_PARSE_ORDER.md** — nodeId 参数指纹、`.cpp` 覆盖、`HAS_METHOD` 重载、`CALLS` 与 `lookupExactAllFull`、单测索引。
+4. **docs/WORKING_TREE_CHANGES_2026-03-31.md** — 工作区改造摘要；与本文第五节、`utils`/`cpp.test` 表格、build/dist 建议、§8.6 等交叉引用。
+5. **embeddings/embedding-pipeline.ts** — 导出 `createVectorIndex`；`semanticSearch` 入口 `await isEmbedderReady()`。
+6. **embeddings/embedder.ts** — Hugging Face 镜像（hf-mirror.com）；`isEmbedderReady` async（内部 init + `createVectorIndex`）。
+7. **embeddings/types.ts** — `maxSnippetLength` 注释（片段长度与算力）。
+8. **graph/graph.ts** — C++ Method/Constructor 同 id：`.cpp`/`.cc`/`.cxx` 后写入覆盖；重载靠参数指纹；非 C++ 仍先写入者优先。
+9. **graph/types.ts** — `NodeProperties.minimumParameterCount`（Method 签名元数据）。
+10. **ingestion/call-processor.ts** — Laravel `guessedId` 用 controller classId；C++ 缓存未命中时 strip 导出宏；`processCalls` 顺序、`remapCppCallableSourceId`、`resolveCallTarget`（`qualifierTypeName`、`callerOwnerClassId`、`lookupMemberFieldType` 补 `receiverTypeName`）、调试日志；`symbolArityAcceptsArgCount`、`filterCallableCandidates` 区间匹配、`formatCandidateBrief` 区间展示。
+11. **ingestion/community-processor.ts** — 社区目录过滤扩展（含 app、helper）。
+12. **ingestion/constants.ts** — Tree-sitter 缓冲 512KB→2MB。
+13. **ingestion/cpp-export-macro-preprocess.ts** — 新增：解析前 strip 导出宏，供 parse-worker / parsing-processor / call-processor / heritage / import。
+14. **ingestion/filesystem-walker.ts** — 单文件大小限制 512KB→2MB。
+15. **ingestion/heritage-processor.ts** — 缓存未命中时 C++ strip 导出宏。
+16. **ingestion/import-processor.ts** — 同上。
+17. **ingestion/parsing-processor.ts** — C++ 构造/声明/定义区分、`enclosingClassId` 与 class-scoped nodeId、`#hashCppCallableOverloadSegment`、Method 提升、class/struct 无 filePath id、strip 宏；C++ Property `description` JSON 与 `fieldType` 注册；顺序路径图节点与 `symbolTable.add` 透传 `minimumParameterCount`。
+18. **ingestion/pipeline.ts** — 进度优化；`GITNEXUS_LOG_PARSE_ORDER` / `GITNEXUS_PROGRESS` 时写 `parse-order.log`（含 chunk 注释），可 `GITNEXUS_LOG_PARSE_ORDER=0` 关闭。
+19. **ingestion/resolution-context.ts** — Tier 1 使用 `lookupExactAllFull` 支撑重载。
+20. **ingestion/symbol-table.ts** — 同文件同名多定义、`lookupExactAllFull`、`add` 按 `nodeId` 更新 global；`memberFieldIndex`、`lookupMemberFieldType`、`fieldType`；`minimumParameterCount` 与同 `nodeId` 合并（保留 min、`parameterCount` 取 max）。
+21. **ingestion/tree-sitter-queries.ts** — C++ 类名/类内方法/析构/指针返回/内联成员体等 CPP_QUERIES；类内数据成员 `field_declaration` 与 `@prop.type`；`field_expression` 注释。
+22. **ingestion/type-env.ts** — `lookupWithMemberFields` 跨文件成员类型。
+23. **ingestion/utils.ts** — `findEnclosingClassId`（qualified、无 filePath classId）；`hashCppCallableOverloadSegment` / `cppParameterListFingerprint`；`cppInClassCallableLabel`；`GITNEXUS_DEBUG_CALLS` / `GITNEXUS_DEBUG_CALLS_NAME`；`findCppCallableQualifiedScopeClassId`（类外 `Class::method`，§8.2）；`MethodSignature.minimumParameterCount`、`cppFormalParameterHasDefault`、`cppMinimumArgCountFromParameterNodes`、`extractMethodSignature` 扩展（§8.6）。
+24. **ingestion/workers/parse-worker.ts** — 与 parsing-processor 对齐的 C++ ingest（声明/定义、class-scoped id、重载 hash、effectiveLabel、strip 宏）；`findEnclosingFunctionId`；`ExtractedCall` 的 `line`、`qualifierTypeName`；Property `description`/`fieldType`；`minimumParameterCount` 透传。
+25. **lbug/csv-generator.ts** — 截断与 `MAX_FILE_CONTENT` 200000→600000；FileContentCache 注释。
+26. **lbug/lbug-adapter.ts** — `closeLbugForPath`、embedding 表名、`BACKTICK_TABLES`、`escapeTableName`；FTS `loadFTSExtension` 幂等；`createConnection` async。
+27. **search/hybrid-search.ts** — `mergeWithRRF` 同路径语义元数据只累加 RRF、不覆盖 score/行号等。
+28. **gitnexus/src/tools/convert_to_csv.py** — 分页 MATCH `ORDER BY`；JSON 解析失败统计与告警。
+29. **gitnexus/debug-\*.mjs、gitnexus/scripts/repro-call-resolution-debug.mjs** — 可选本地调试脚本（未跟踪时可 .gitignore）。
+30. **gitnexus/test/fixtures/lang-resolution/** — 未跟踪：cpp-member-field / cpp-qualified-call / cpp-member-samefile-name-collide / cpp-call-resolution-debug-repro 等夹具。
+31. **gitnexus/test/fixtures/mini-repo/** — 未跟踪迷你仓库夹具。
+32. **gitnexus/test/integration/resolvers/cpp.test.ts** — 同文件碰撞、成员字段、限定调用；`TZmdbMigration::SetIPAndPort` 体内 CALLS `sourceId` 与 `Method:Class:TZmdbMigration:SetIPAndPort#` 对齐。
+33. **gitnexus/test/integration/tree-sitter-languages.test.ts** — 类内指针/引用返回带函数体成员捕获。
+34. **gitnexus/test/unit/call-processor.test.ts** — 含 `Connect` + `minimumParameterCount` 的 4 实参消解单测。
+35. **gitnexus/test/unit/graph.test.ts** — C++ `.cpp`/`.cc`/`.cxx` 覆盖与双 `.cpp` 同 id。
+36. **gitnexus/test/unit/ingestion-utils.test.ts** — `cppInClassCallableLabel`。
+37. **gitnexus/test/unit/method-signature.test.ts** — 重载 hash、默认参与指纹、类内外一致；5 形参+末尾默认的 `minimumParameterCount`；类外定义无 min。
+38. **gitnexus/test/unit/symbol-table.test.ts** — 重载与 `lookupExactAllFull`；`minimumParameterCount` 头/源注册顺序合并。
+39. **gitnexus/test/unit/type-env.test.ts** — Mock `lookupExactAllFull`。
 
 #### 六、gitnexus-web/src/lib
 
@@ -114,24 +98,16 @@
 
 **Worker功能增强：**
 
-1. **ingestion.worker.ts - 导入依赖扩展，新增loadSettings用于读取用户配置的递归限制等设置**
-2. **ingestion.worker.ts - HTTP API路径调整，去掉/api前缀（/query、/search），与后端服务路由保持一致**
-3. **ingestion.worker.ts - runPipeline和runPipelineFromFiles方法增强，新增lbugReady状态跟踪，添加错误日志输出，返回时传递数据库加载状态**
-4. **ingestion.worker.ts - chatStream方法增强，新增recursionLimit参数支持，实现优先级：参数 > 用户设置 > 默认值100**
-5. **ingestion.worker.ts - normalizeBackendBaseUrl 规范化粘贴型后端 URL；HTTP /search 解析 body.results 数组（非数组时按空数组），映射 sources、score、rank、bm25Score、semanticScore 等**
+1. **ingestion.worker.ts** — `loadSettings` 与递归限制；HTTP API 去掉 `/api` 前缀（`/query`、`/search`）；`runPipeline` / `runPipelineFromFiles` 的 `lbugReady` 与错误日志；`chatStream` 的 `recursionLimit`（参数 > 设置 > 默认 100）；`normalizeBackendBaseUrl`；`/search` 解析 `body.results` 并映射 sources、score、rank、bm25Score、semanticScore。
 
 #### 九、gitnexus-web/src/services
 
 **服务层功能增强：**
 
-1. **server-connection.ts - 新增cloneAnalyzeOnServer函数，通过后端clone-analyze API拉取Git仓库并建索引，支持token认证、分支指定、流式响应、已存在场景处理、文件数量进度信息**
-2. **server-connection.ts - 新增uploadZipAnalyzeOnServer函数，通过后端zip-upload-analyze API上传ZIP文件并建索引，支持最大500MB、流式响应、已存在场景处理**
-3. **git-clone.ts - 新增parseGenericGitUrl函数，解析任意Git URL（不仅限于GitHub）**
-4. **git-clone.ts - 新增cloneGenericGitRepository函数，克隆任意Git仓库（私有/内网/自托管），支持代理模式和token认证**
-5. **git-clone.ts - 新增createProxiedHttpForLocal和createHttpWithToken辅助函数，支持代理转发和token认证**
-6. **git-clone.ts - 代理路径自动补全，如果proxyUrl不是以/api/proxy结尾则自动补全**
-7. **backend.ts - 默认端口从4747改为6660，与CLI服务端口保持一致**
-8. **saved-queries-service.ts - 新增文件，保存的查询服务，持久化用户Cypher查询到localStorage，支持内置查询和用户自定义查询**
+1. **server-connection.ts** — `cloneAnalyzeOnServer`（clone-analyze、token/分支、流式、已存在、文件进度）；`uploadZipAnalyzeOnServer`（ZIP≤500MB、流式）。
+2. **git-clone.ts** — `parseGenericGitUrl`；`cloneGenericGitRepository`（代理、token）；`createProxiedHttpForLocal` / `createHttpWithToken`；代理 URL 自动补全 `/api/proxy`。
+3. **backend.ts** — 默认端口 4747→6660。
+4. **saved-queries-service.ts** — 新增：Cypher 查询持久化（localStorage）、内置与用户自定义查询。
 
 #### 十、gitnexus-web/src/hooks
 

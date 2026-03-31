@@ -82,6 +82,7 @@ const processParsingWithWorkers = async (
     for (const sym of result.symbols) {
       symbolTable.add(sym.filePath, sym.name, sym.nodeId, sym.type, {
         parameterCount: sym.parameterCount,
+        minimumParameterCount: sym.minimumParameterCount,
         returnType: sym.returnType,
         ownerId: sym.ownerId,
         fieldType: sym.fieldType,
@@ -319,6 +320,9 @@ const processParsingSequential = async (
           } : {}),
           ...(methodSig ? {
             parameterCount: methodSig.parameterCount,
+            ...(methodSig.minimumParameterCount !== undefined
+              ? { minimumParameterCount: methodSig.minimumParameterCount }
+              : {}),
             returnType: methodSig.returnType,
           } : {}),
           ...(description !== undefined ? { description } : {}),
@@ -329,6 +333,7 @@ const processParsingSequential = async (
 
       symbolTable.add(file.path, nodeName, nodeId, effectiveLabel, {
         parameterCount: methodSig?.parameterCount,
+        minimumParameterCount: methodSig?.minimumParameterCount,
         returnType: methodSig?.returnType,
         ownerId: enclosingClassId ?? undefined,
         fieldType: cppPropertyFieldType,

@@ -332,6 +332,37 @@ func log(args ...string) int { return 0 }`;
       expect(sig.returnType).toBe('std::string');
     });
 
+    it('C++: class method declaration with trailing default yields minimumParameterCount for arity matching', () => {
+      parser.setLanguage(CPP);
+      const header = `class TZmdbLocalDatabase {
+  bool Connect(const char *sUser,const char *sPassword,const char *sServerName,const char *sNodeName,bool bIsAutoCommit=false);
+};`;
+      const tree = parser.parse(header);
+      const find = (root: { type: string; children: any[] }, t: string): any => {
+        if (root.type === t) return root;
+        for (const c of root.children) {
+          const f = find(c, t);
+          if (f) return f;
+        }
+        return null;
+      };
+      const fieldDecl = find(tree.rootNode, 'field_declaration')!;
+      const sig = extractMethodSignature(fieldDecl);
+      expect(sig.parameterCount).toBe(5);
+      expect(sig.minimumParameterCount).toBe(4);
+    });
+
+    it('C++: out-of-line definition omits default values so minimumParameterCount is undefined', () => {
+      parser.setLanguage(CPP);
+      const cpp =
+        'bool TZmdbLocalDatabase::Connect(const char *sUser,const char *sPassword,const char *sServerName,const char *sNodeName,bool bIsAutoCommit) { return true; }';
+      const tree = parser.parse(cpp);
+      const fnDef = tree.rootNode.namedChild(0)!;
+      const sig = extractMethodSignature(fnDef);
+      expect(sig.parameterCount).toBe(5);
+      expect(sig.minimumParameterCount).toBeUndefined();
+    });
+
     it('returns undefined returnType for void', () => {
       parser.setLanguage(CPP);
       const code = `void doNothing() { }`;
