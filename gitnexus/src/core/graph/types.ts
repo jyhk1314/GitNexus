@@ -122,6 +122,8 @@ export interface KnowledgeGraph {
   relationshipCount: number,
   addNode: (node: GraphNode) => void,
   addRelationship: (relationship: GraphRelationship) => void,
+  /** Remove a single relationship by id (for post-pass edge rewriting). */
+  removeRelationship: (relationshipId: string) => boolean,
   removeNode: (nodeId: string) => boolean,
   removeNodesByFile: (filePath: string) => number,
 }

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { KnowledgeGraph } from '../graph/types.js';
+import { KnowledgeGraph, type GraphRelationship } from '../graph/types.js';
 import { ASTCache } from './ast-cache.js';
 import type { SymbolDefinition, SymbolTable } from './symbol-table.js';
 import Parser from 'tree-sitter';
@@ -1133,4 +1133,89 @@ export const processRoutesFromExtracted = async (
   }
 
   onProgress?.(extractedRoutes.length, extractedRoutes.length);
+};
+
+// ── C++ CALLS: add direct CALLS → Class/Struct when only Method/Constructor edges exist ──
+// Example: caller has Method:Class:TZmdbStrFunc:StrCmpNoCase and Class:TZmdbCCryptDES but no
+// CALLS → Class:TZmdbStrFunc — emit synthetic CALLS to the owner class node for completeness.
+
+/** `Method:` / `Constructor:` id stem starts with `Class:` or `Struct:` (not file-path TU stem). */
+const cppMethodLikeTargetIdHasClassOrStructScope = (nodeId: string): boolean => {
+  if (!nodeId.startsWith('Method:') && !nodeId.startsWith('Constructor:')) return false;
+  const rest = nodeId.slice(nodeId.indexOf(':') + 1);
+  const stem = rest.split('#')[0] ?? '';
+  const first = stem.split(':')[0];
+  return first === 'Class' || first === 'Struct';
+};
+
+/** `Function:path/to/file.cpp:funcName` → file path (everything before last `:`). */
+const cppFilePathFromFunctionSourceId = (sourceId: string): string | undefined => {
+  if (!sourceId.startsWith('Function:')) return undefined;
+  const rest = sourceId.slice('Function:'.length);
+  const lastColon = rest.lastIndexOf(':');
+  if (lastColon <= 0) return undefined;
+  return rest.slice(0, lastColon);
+};
+
+const isCppFunctionLikeCaller = (graph: KnowledgeGraph, sourceId: string): boolean => {
+  const n = graph.getNode(sourceId);
+  if (!n) return false;
+  if (n.label !== 'Function' && n.label !== 'Method' && n.label !== 'Constructor') return false;
+  if (n.properties.language === SupportedLanguages.CPlusPlus) return true;
+  const fp = n.properties.filePath;
+  if (fp && getLanguageFromFilename(fp) === SupportedLanguages.CPlusPlus) return true;
+  const fromFunc = cppFilePathFromFunctionSourceId(sourceId);
+  if (fromFunc && getLanguageFromFilename(fromFunc) === SupportedLanguages.CPlusPlus) return true;
+  return false;
+};
+
+/**
+ * For each C++ Function/Method/Constructor caller: if a CALLS target is a class-scoped
+ * Method/Constructor, ensure there is also a CALLS edge to its owner `Class:X` / `Struct:X`
+ * when that class node exists and is not already a CALLS target from the same caller.
+ */
+export const enrichCppCallsTargetsFromSiblingClassScope = (graph: KnowledgeGraph): void => {
+  const bySource = new Map<string, GraphRelationship[]>();
+  for (const rel of graph.relationships) {
+    if (rel.type !== 'CALLS') continue;
+    let list = bySource.get(rel.sourceId);
+    if (!list) {
+      list = [];
+      bySource.set(rel.sourceId, list);
+    }
+    list.push(rel);
+  }
+
+  for (const [sourceId, rels] of bySource) {
+    if (!isCppFunctionLikeCaller(graph, sourceId)) continue;
+
+    const callTargets = new Set(rels.filter(r => r.type === 'CALLS').map(r => r.targetId));
+    const ownersMissingClassEdge = new Set<string>();
+
+    for (const r of rels) {
+      if (r.type !== 'CALLS') continue;
+      if (!cppMethodLikeTargetIdHasClassOrStructScope(r.targetId)) continue;
+      const ownerId = tryCppOwnerClassIdFromCallSourceId(r.targetId);
+      if (!ownerId) continue;
+      const callee = graph.getNode(r.targetId);
+      if (!callee) continue;
+      if (callee.label !== 'Method' && callee.label !== 'Constructor') continue;
+      if (callTargets.has(ownerId)) continue;
+      if (!graph.getNode(ownerId)) continue;
+      ownersMissingClassEdge.add(ownerId);
+    }
+
+    for (const ownerId of ownersMissingClassEdge) {
+      const pseudoCallee = `<cpp-owner-class>${ownerId}`;
+      graph.addRelationship({
+        id: generateId('CALLS', `${sourceId}:${pseudoCallee}->${ownerId}`),
+        sourceId,
+        targetId: ownerId,
+        type: 'CALLS',
+        confidence: 0.85,
+        reason: 'cpp-method-implies-owner-class',
+      });
+      callTargets.add(ownerId);
+    }
+  }
 };

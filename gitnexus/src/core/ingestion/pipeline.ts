@@ -6,7 +6,12 @@ import {
   processImportsFromExtracted,
   buildImportResolutionContext
 } from './import-processor.js';
-import { processCalls, processCallsFromExtracted, processRoutesFromExtracted } from './call-processor.js';
+import {
+  processCalls,
+  processCallsFromExtracted,
+  processRoutesFromExtracted,
+  enrichCppCallsTargetsFromSiblingClassScope,
+} from './call-processor.js';
 import { processHeritage, processHeritageFromExtracted } from './heritage-processor.js';
 import { computeMRO } from './mro-processor.js';
 import { processCommunities } from './community-processor.js';
@@ -373,6 +378,8 @@ export const runPipelineFromRepo = async (
       }
       astCache.clear();
     }
+
+    enrichCppCallsTargetsFromSiblingClassScope(graph);
 
     // Log resolution cache stats
     if (isDev) {

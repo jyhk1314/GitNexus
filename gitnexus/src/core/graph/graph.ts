@@ -36,6 +36,9 @@ export const createKnowledgeGraph = (): KnowledgeGraph => {
     }
   };
 
+  const removeRelationship = (relationshipId: string): boolean =>
+    relationshipMap.delete(relationshipId);
+
   /**
    * Remove a single node and all relationships involving it
    */
@@ -93,6 +96,7 @@ export const createKnowledgeGraph = (): KnowledgeGraph => {
 
     addNode,
     addRelationship,
+    removeRelationship,
     removeNode,
     removeNodesByFile,
 

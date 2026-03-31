@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { processCallsFromExtracted, extractReturnTypeName } from '../../src/core/ingestion/call-processor.js';
+import {
+  processCallsFromExtracted,
+  extractReturnTypeName,
+  enrichCppCallsTargetsFromSiblingClassScope,
+} from '../../src/core/ingestion/call-processor.js';
 import { createResolutionContext, type ResolutionContext } from '../../src/core/ingestion/resolution-context.js';
 import { createKnowledgeGraph } from '../../src/core/graph/graph.js';
+import { generateId } from '../../src/lib/utils.js';
+import { SupportedLanguages } from '../../src/config/supported-languages.js';
 import type { ExtractedCall, FileConstructorBindings } from '../../src/core/ingestion/workers/parse-worker.js';
 
 describe('processCallsFromExtracted', () => {
@@ -548,6 +554,123 @@ describe('processCallsFromExtracted', () => {
     // last-write-wins would give both calls the same receiver type)
     expect(rels[0].sourceId).toBe('Function:src/index.ts:processUser');
     expect(rels[1].sourceId).toBe('Function:src/index.ts:processRepo');
+  });
+});
+
+describe('enrichCppCallsTargetsFromSiblingClassScope', () => {
+  let graph: ReturnType<typeof createKnowledgeGraph>;
+
+  beforeEach(() => {
+    graph = createKnowledgeGraph();
+  });
+
+  it('adds CALLS → owner Class when caller has Method:Class:… but no direct CALLS to that class', () => {
+    const lang = SupportedLanguages.CPlusPlus;
+    const callerId = 'Function:app/DataChange.cpp:ReadMdbDataChangeCfg';
+    const mCrypt = 'Method:Class:TZmdbCCryptDES:Decrypt#e9307b2c2906';
+    const mStr = 'Method:Class:TZmdbStrFunc:StrCmpNoCase#876f5b7c2116';
+
+    graph.addNode({
+      id: callerId,
+      label: 'Function',
+      properties: { name: 'ReadMdbDataChangeCfg', filePath: 'app/DataChange.cpp', language: lang },
+    });
+    for (const [id, name] of [
+      ['Class:TZmdbCCryptDES', 'TZmdbCCryptDES'],
+      ['Class:TZmdbStrFunc', 'TZmdbStrFunc'],
+    ] as const) {
+      graph.addNode({
+        id,
+        label: 'Class',
+        properties: { name, filePath: 'x.h', language: lang },
+      });
+    }
+    graph.addNode({
+      id: mCrypt,
+      label: 'Method',
+      properties: { name: 'Decrypt', filePath: 'x.h', language: lang },
+    });
+    graph.addNode({
+      id: mStr,
+      label: 'Method',
+      properties: { name: 'StrCmpNoCase', filePath: 'x.h', language: lang },
+    });
+
+    graph.addRelationship({
+      id: generateId('CALLS', `${callerId}:Decrypt->${mCrypt}`),
+      sourceId: callerId,
+      targetId: mCrypt,
+      type: 'CALLS',
+      confidence: 1,
+      reason: 'same-file',
+    });
+    graph.addRelationship({
+      id: generateId('CALLS', `${callerId}:StrCmpNoCase->${mStr}`),
+      sourceId: callerId,
+      targetId: mStr,
+      type: 'CALLS',
+      confidence: 1,
+      reason: 'same-file',
+    });
+    graph.addRelationship({
+      id: generateId('CALLS', `${callerId}:new->Class:TZmdbCCryptDES`),
+      sourceId: callerId,
+      targetId: 'Class:TZmdbCCryptDES',
+      type: 'CALLS',
+      confidence: 0.9,
+      reason: 'import-resolved',
+    });
+
+    enrichCppCallsTargetsFromSiblingClassScope(graph);
+
+    const toStrClass = graph.relationships.filter(
+      r => r.type === 'CALLS' && r.sourceId === callerId && r.targetId === 'Class:TZmdbStrFunc',
+    );
+    expect(toStrClass).toHaveLength(1);
+    expect(toStrClass[0].reason).toBe('cpp-method-implies-owner-class');
+    expect(toStrClass[0].confidence).toBe(0.85);
+
+    const toCryptClass = graph.relationships.filter(
+      r => r.type === 'CALLS' && r.sourceId === callerId && r.targetId === 'Class:TZmdbCCryptDES',
+    );
+    expect(toCryptClass).toHaveLength(1);
+  });
+
+  it('treats Function:path.cpp:name as C++ caller when node.language is missing', () => {
+    const callerId = 'Function:BackServiceCpp/src/cpp/Zmdb/App/DataChange.cpp:ReadMdbDataChangeCfg';
+    const mStr = 'Method:Class:TZmdbStrFunc:StrCmpNoCase#876f5b7c2116';
+
+    graph.addNode({
+      id: callerId,
+      label: 'Function',
+      properties: { name: 'ReadMdbDataChangeCfg', filePath: 'BackServiceCpp/src/cpp/Zmdb/App/DataChange.cpp' },
+    });
+    graph.addNode({
+      id: 'Class:TZmdbStrFunc',
+      label: 'Class',
+      properties: { name: 'TZmdbStrFunc', filePath: 'x.h', language: SupportedLanguages.CPlusPlus },
+    });
+    graph.addNode({
+      id: mStr,
+      label: 'Method',
+      properties: { name: 'StrCmpNoCase', filePath: 'x.h', language: SupportedLanguages.CPlusPlus },
+    });
+    graph.addRelationship({
+      id: generateId('CALLS', `${callerId}:StrCmpNoCase->${mStr}`),
+      sourceId: callerId,
+      targetId: mStr,
+      type: 'CALLS',
+      confidence: 1,
+      reason: 'same-file',
+    });
+
+    enrichCppCallsTargetsFromSiblingClassScope(graph);
+
+    expect(
+      graph.relationships.some(
+        r => r.sourceId === callerId && r.targetId === 'Class:TZmdbStrFunc',
+      ),
+    ).toBe(true);
   });
 });
 

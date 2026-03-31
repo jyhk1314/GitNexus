@@ -45,41 +45,42 @@
 2. **docs/CXX_CODERELATION_OPTIMIZATION_PLAN.md** — C++ CodeRelation（CALLS）方案与 §8 落地对照；§8.2（类外 `Class::method` / `findCppCallableQualifiedScopeClassId`）、§8.4（改 worker 依赖源码后须 `npm run build` 同步 `dist`）、§8.6（末尾默认实参、`minimumParameterCount`、§7 修订记录）。
 3. **docs/CXX_METHOD_MERGE_AND_PARSE_ORDER.md** — nodeId 参数指纹、`.cpp` 覆盖、`HAS_METHOD` 重载、`CALLS` 与 `lookupExactAllFull`、单测索引。
 4. **docs/WORKING_TREE_CHANGES_2026-03-31.md** — 工作区改造摘要；与本文第五节、`utils`/`cpp.test` 表格、build/dist 建议、§8.6 等交叉引用。
-5. **embeddings/embedding-pipeline.ts** — 导出 `createVectorIndex`；`semanticSearch` 入口 `await isEmbedderReady()`。
-6. **embeddings/embedder.ts** — Hugging Face 镜像（hf-mirror.com）；`isEmbedderReady` async（内部 init + `createVectorIndex`）。
-7. **embeddings/types.ts** — `maxSnippetLength` 注释（片段长度与算力）。
-8. **graph/graph.ts** — C++ Method/Constructor 同 id：`.cpp`/`.cc`/`.cxx` 后写入覆盖；重载靠参数指纹；非 C++ 仍先写入者优先。
-9. **graph/types.ts** — `NodeProperties.minimumParameterCount`（Method 签名元数据）。
-10. **ingestion/call-processor.ts** — Laravel `guessedId` 用 controller classId；C++ 缓存未命中时 strip 导出宏；`processCalls` 顺序、`remapCppCallableSourceId`、`resolveCallTarget`（`qualifierTypeName`、`callerOwnerClassId`、`lookupMemberFieldType` 补 `receiverTypeName`）、调试日志；`symbolArityAcceptsArgCount`、`filterCallableCandidates` 区间匹配、`formatCandidateBrief` 区间展示。
-11. **ingestion/community-processor.ts** — 社区目录过滤扩展（含 app、helper）。
-12. **ingestion/constants.ts** — Tree-sitter 缓冲 512KB→2MB。
-13. **ingestion/cpp-export-macro-preprocess.ts** — 新增：解析前 strip 导出宏，供 parse-worker / parsing-processor / call-processor / heritage / import。
-14. **ingestion/filesystem-walker.ts** — 单文件大小限制 512KB→2MB。
-15. **ingestion/heritage-processor.ts** — 缓存未命中时 C++ strip 导出宏。
-16. **ingestion/import-processor.ts** — 同上。
-17. **ingestion/parsing-processor.ts** — C++ 构造/声明/定义区分、`enclosingClassId` 与 class-scoped nodeId、`#hashCppCallableOverloadSegment`、Method 提升、class/struct 无 filePath id、strip 宏；C++ Property `description` JSON 与 `fieldType` 注册；顺序路径图节点与 `symbolTable.add` 透传 `minimumParameterCount`。
-18. **ingestion/pipeline.ts** — 进度优化；`GITNEXUS_LOG_PARSE_ORDER` / `GITNEXUS_PROGRESS` 时写 `parse-order.log`（含 chunk 注释），可 `GITNEXUS_LOG_PARSE_ORDER=0` 关闭。
-19. **ingestion/resolution-context.ts** — Tier 1 使用 `lookupExactAllFull` 支撑重载。
-20. **ingestion/symbol-table.ts** — 同文件同名多定义、`lookupExactAllFull`、`add` 按 `nodeId` 更新 global；`memberFieldIndex`、`lookupMemberFieldType`、`fieldType`；`minimumParameterCount` 与同 `nodeId` 合并（保留 min、`parameterCount` 取 max）。
-21. **ingestion/tree-sitter-queries.ts** — C++ 类名/类内方法/析构/指针返回/内联成员体等 CPP_QUERIES；类内数据成员 `field_declaration` 与 `@prop.type`；`field_expression` 注释。
-22. **ingestion/type-env.ts** — `lookupWithMemberFields` 跨文件成员类型。
-23. **ingestion/utils.ts** — `findEnclosingClassId`（qualified、无 filePath classId）；`hashCppCallableOverloadSegment` / `cppParameterListFingerprint`；`cppInClassCallableLabel`；`GITNEXUS_DEBUG_CALLS` / `GITNEXUS_DEBUG_CALLS_NAME`；`findCppCallableQualifiedScopeClassId`（类外 `Class::method`，§8.2）；`MethodSignature.minimumParameterCount`、`cppFormalParameterHasDefault`、`cppMinimumArgCountFromParameterNodes`、`extractMethodSignature` 扩展（§8.6）。
-24. **ingestion/workers/parse-worker.ts** — 与 parsing-processor 对齐的 C++ ingest（声明/定义、class-scoped id、重载 hash、effectiveLabel、strip 宏）；`findEnclosingFunctionId`；`ExtractedCall` 的 `line`、`qualifierTypeName`；Property `description`/`fieldType`；`minimumParameterCount` 透传。
-25. **lbug/csv-generator.ts** — 截断与 `MAX_FILE_CONTENT` 200000→600000；FileContentCache 注释。
-26. **lbug/lbug-adapter.ts** — `closeLbugForPath`、embedding 表名、`BACKTICK_TABLES`、`escapeTableName`；FTS `loadFTSExtension` 幂等；`createConnection` async。
-27. **search/hybrid-search.ts** — `mergeWithRRF` 同路径语义元数据只累加 RRF、不覆盖 score/行号等。
-28. **gitnexus/src/tools/convert_to_csv.py** — 分页 MATCH `ORDER BY`；JSON 解析失败统计与告警。
-29. **gitnexus/debug-\*.mjs、gitnexus/scripts/repro-call-resolution-debug.mjs** — 可选本地调试脚本（未跟踪时可 .gitignore）。
-30. **gitnexus/test/fixtures/lang-resolution/** — 未跟踪：cpp-member-field / cpp-qualified-call / cpp-member-samefile-name-collide / cpp-call-resolution-debug-repro 等夹具。
-31. **gitnexus/test/fixtures/mini-repo/** — 未跟踪迷你仓库夹具。
-32. **gitnexus/test/integration/resolvers/cpp.test.ts** — 同文件碰撞、成员字段、限定调用；`TZmdbMigration::SetIPAndPort` 体内 CALLS `sourceId` 与 `Method:Class:TZmdbMigration:SetIPAndPort#` 对齐。
-33. **gitnexus/test/integration/tree-sitter-languages.test.ts** — 类内指针/引用返回带函数体成员捕获。
-34. **gitnexus/test/unit/call-processor.test.ts** — 含 `Connect` + `minimumParameterCount` 的 4 实参消解单测。
-35. **gitnexus/test/unit/graph.test.ts** — C++ `.cpp`/`.cc`/`.cxx` 覆盖与双 `.cpp` 同 id。
-36. **gitnexus/test/unit/ingestion-utils.test.ts** — `cppInClassCallableLabel`。
-37. **gitnexus/test/unit/method-signature.test.ts** — 重载 hash、默认参与指纹、类内外一致；5 形参+末尾默认的 `minimumParameterCount`；类外定义无 min。
-38. **gitnexus/test/unit/symbol-table.test.ts** — 重载与 `lookupExactAllFull`；`minimumParameterCount` 头/源注册顺序合并。
-39. **gitnexus/test/unit/type-env.test.ts** — Mock `lookupExactAllFull`。
+5. **docs/CXX_CALLS_OWNER_CLASS_ENRICHMENT.md** — C++ `CALLS` 后处理：同一 `fromId` 已有 `Method:Class:…`/`Constructor:…` 但缺少 `CALLS→Class/Struct` 时补边；`Function:…cpp:…` 无 `language` 时按路径推断；与 `enrichCppCallsTargetsFromSiblingClassScope` 对照。
+6. **embeddings/embedding-pipeline.ts** — 导出 `createVectorIndex`；`semanticSearch` 入口 `await isEmbedderReady()`。
+7. **embeddings/embedder.ts** — Hugging Face 镜像（hf-mirror.com）；`isEmbedderReady` async（内部 init + `createVectorIndex`）。
+8. **embeddings/types.ts** — `maxSnippetLength` 注释（片段长度与算力）。
+9. **graph/graph.ts** — C++ Method/Constructor 同 id：`.cpp`/`.cc`/`.cxx` 后写入覆盖；重载靠参数指纹；非 C++ 仍先写入者优先；`removeRelationship(relId)` 供图边删除。
+10. **graph/types.ts** — `NodeProperties.minimumParameterCount`（Method 签名元数据）；`KnowledgeGraph.removeRelationship`。
+11. **ingestion/call-processor.ts** — Laravel `guessedId` 用 controller classId；C++ 缓存未命中时 strip 导出宏；`processCalls` 顺序、`remapCppCallableSourceId`、`resolveCallTarget`（`qualifierTypeName`、`callerOwnerClassId`、`lookupMemberFieldType` 补 `receiverTypeName`）、调试日志；`symbolArityAcceptsArgCount`、`filterCallableCandidates` 区间匹配、`formatCandidateBrief` 区间展示；后处理 `enrichCppCallsTargetsFromSiblingClassScope(graph)`：C++ 同一 `fromId` 已有类作用域 `Method`/`Constructor` 但尚无 `CALLS→Class/Struct` owner 时补边（`cpp-method-implies-owner-class`）；`Function:…cpp:…` 无 `language` 时按 `sourceId` 内路径推断 C++。
+12. **ingestion/community-processor.ts** — 社区目录过滤扩展（含 app、helper）。
+13. **ingestion/constants.ts** — Tree-sitter 缓冲 512KB→2MB。
+14. **ingestion/cpp-export-macro-preprocess.ts** — 新增：解析前 strip 导出宏，供 parse-worker / parsing-processor / call-processor / heritage / import。
+15. **ingestion/filesystem-walker.ts** — 单文件大小限制 512KB→2MB。
+16. **ingestion/heritage-processor.ts** — 缓存未命中时 C++ strip 导出宏。
+17. **ingestion/import-processor.ts** — 同上。
+18. **ingestion/parsing-processor.ts** — C++ 构造/声明/定义区分、`enclosingClassId` 与 class-scoped nodeId、`#hashCppCallableOverloadSegment`、Method 提升、class/struct 无 filePath id、strip 宏；C++ Property `description` JSON 与 `fieldType` 注册；顺序路径图节点与 `symbolTable.add` 透传 `minimumParameterCount`。
+19. **ingestion/pipeline.ts** — 进度优化；`GITNEXUS_LOG_PARSE_ORDER` / `GITNEXUS_PROGRESS` 时写 `parse-order.log`（含 chunk 注释），可 `GITNEXUS_LOG_PARSE_ORDER=0` 关闭；全量 call 解析结束后 `enrichCppCallsTargetsFromSiblingClassScope(graph)`。
+20. **ingestion/resolution-context.ts** — Tier 1 使用 `lookupExactAllFull` 支撑重载。
+21. **ingestion/symbol-table.ts** — 同文件同名多定义、`lookupExactAllFull`、`add` 按 `nodeId` 更新 global；`memberFieldIndex`、`lookupMemberFieldType`、`fieldType`；`minimumParameterCount` 与同 `nodeId` 合并（保留 min、`parameterCount` 取 max）。
+22. **ingestion/tree-sitter-queries.ts** — C++ 类名/类内方法/析构/指针返回/内联成员体等 CPP_QUERIES；类内数据成员 `field_declaration` 与 `@prop.type`；`field_expression` 注释。
+23. **ingestion/type-env.ts** — `lookupWithMemberFields` 跨文件成员类型。
+24. **ingestion/utils.ts** — `findEnclosingClassId`（qualified、无 filePath classId）；`hashCppCallableOverloadSegment` / `cppParameterListFingerprint`；`cppInClassCallableLabel`；`GITNEXUS_DEBUG_CALLS` / `GITNEXUS_DEBUG_CALLS_NAME`；`findCppCallableQualifiedScopeClassId`（类外 `Class::method`，§8.2）；`MethodSignature.minimumParameterCount`、`cppFormalParameterHasDefault`、`cppMinimumArgCountFromParameterNodes`、`extractMethodSignature` 扩展（§8.6）。
+25. **ingestion/workers/parse-worker.ts** — 与 parsing-processor 对齐的 C++ ingest（声明/定义、class-scoped id、重载 hash、effectiveLabel、strip 宏）；`findEnclosingFunctionId`；`ExtractedCall` 的 `line`、`qualifierTypeName`；Property `description`/`fieldType`；`minimumParameterCount` 透传。
+26. **lbug/csv-generator.ts** — 截断与 `MAX_FILE_CONTENT` 200000→600000；FileContentCache 注释。
+27. **lbug/lbug-adapter.ts** — `closeLbugForPath`、embedding 表名、`BACKTICK_TABLES`、`escapeTableName`；FTS `loadFTSExtension` 幂等；`createConnection` async。
+28. **search/hybrid-search.ts** — `mergeWithRRF` 同路径语义元数据只累加 RRF、不覆盖 score/行号等。
+29. **gitnexus/src/tools/convert_to_csv.py** — 分页 MATCH `ORDER BY`；JSON 解析失败统计与告警。
+30. **gitnexus/debug-\*.mjs、gitnexus/scripts/repro-call-resolution-debug.mjs** — 可选本地调试脚本（未跟踪时可 .gitignore）。
+31. **gitnexus/test/fixtures/lang-resolution/** — 未跟踪：cpp-member-field / cpp-qualified-call / cpp-member-samefile-name-collide / cpp-call-resolution-debug-repro 等夹具。
+32. **gitnexus/test/fixtures/mini-repo/** — 未跟踪迷你仓库夹具。
+33. **gitnexus/test/integration/resolvers/cpp.test.ts** — 同文件碰撞、成员字段、限定调用；`TZmdbMigration::SetIPAndPort` 体内 CALLS `sourceId` 与 `Method:Class:TZmdbMigration:SetIPAndPort#` 对齐。
+34. **gitnexus/test/integration/tree-sitter-languages.test.ts** — 类内指针/引用返回带函数体成员捕获。
+35. **gitnexus/test/unit/call-processor.test.ts** — 含 `Connect` + `minimumParameterCount` 的 4 实参消解单测；`enrichCppCallsTargetsFromSiblingClassScope`（缺 owner Class 边补全、`Function:` 路径推断 C++）。
+36. **gitnexus/test/unit/graph.test.ts** — C++ `.cpp`/`.cc`/`.cxx` 覆盖与双 `.cpp` 同 id；`removeRelationship` 单测。
+37. **gitnexus/test/unit/ingestion-utils.test.ts** — `cppInClassCallableLabel`。
+38. **gitnexus/test/unit/method-signature.test.ts** — 重载 hash、默认参与指纹、类内外一致；5 形参+末尾默认的 `minimumParameterCount`；类外定义无 min。
+39. **gitnexus/test/unit/symbol-table.test.ts** — 重载与 `lookupExactAllFull`；`minimumParameterCount` 头/源注册顺序合并。
+40. **gitnexus/test/unit/type-env.test.ts** — Mock `lookupExactAllFull`。
 
 #### 六、gitnexus-web/src/lib
 

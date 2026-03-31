@@ -310,4 +310,15 @@ describe('createKnowledgeGraph', () => {
     g.forEachRelationship(r => types.push(r.type));
     expect(types).toEqual(['CALLS']);
   });
+
+  it('removeRelationship deletes by id', () => {
+    const g = createKnowledgeGraph();
+    g.addNode(makeNode('fn:a', 'a'));
+    g.addNode(makeNode('fn:b', 'b'));
+    const rel = makeRel('fn:a', 'fn:b');
+    g.addRelationship(rel);
+    expect(g.removeRelationship(rel.id)).toBe(true);
+    expect(g.relationshipCount).toBe(0);
+    expect(g.removeRelationship(rel.id)).toBe(false);
+  });
 });
