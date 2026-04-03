@@ -473,7 +473,7 @@ export const runPipelineFromRepo = async (
     const serverProcessDetectionConfig = {
       maxProcesses: dynamicMaxProcesses,
       minSteps: 4,
-      maxBranching: 5,
+      maxBranching: 20,
     };
 
     const processFilter = loadGitNexusFilter(repoPath);
