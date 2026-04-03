@@ -467,12 +467,12 @@ export const runPipelineFromRepo = async (
 
     let symbolCount = 0;
     graph.forEachNode(n => { if (n.label !== 'File') symbolCount++; });
-    const dynamicMaxProcesses = Math.max(20, Math.min(600, Math.round(symbolCount / 10)));
+    const dynamicMaxProcesses = Math.max(20, Math.min(900, Math.round(symbolCount / 10)));
 
     /** CLI / serve（`runPipelineFromRepo`）服务端分析时的 Process 检测参数；与 `process-processor` 库默认值可不同。 */
     const serverProcessDetectionConfig = {
       maxProcesses: dynamicMaxProcesses,
-      minSteps: 5,
+      minSteps: 3,
       maxBranching: 30,
       maxTraceDepth: 25
     };
