@@ -503,7 +503,7 @@ describe('processProcesses', () => {
       expect(result.processes.some(p => p.entryPointId === 'func:a')).toBe(false);
     });
 
-    it('CLASS omits filtered-class Methods from the trace but keeps downstream callees on the same Process', async () => {
+    it('CLASS: main→A / main→B / main→C — filtering B class only drops the B branch, not main→A or main→C', async () => {
       const graph = createKnowledgeGraph();
 
       graph.addNode({
@@ -519,6 +519,18 @@ describe('processProcesses', () => {
         },
       });
       graph.addNode({
+        id: 'func:a',
+        label: 'Function',
+        properties: {
+          name: 'a',
+          filePath: 'src/a.ts',
+          startLine: 1,
+          endLine: 5,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addNode({
         id: 'class:BadSvc',
         label: 'Class',
         properties: {
@@ -529,10 +541,10 @@ describe('processProcesses', () => {
         },
       });
       graph.addNode({
-        id: 'method:run',
+        id: 'method:b',
         label: 'Method',
         properties: {
-          name: 'run',
+          name: 'b',
           filePath: 'src/svc.ts',
           startLine: 5,
           endLine: 8,
@@ -541,11 +553,11 @@ describe('processProcesses', () => {
         },
       });
       graph.addNode({
-        id: 'func:end',
+        id: 'func:c',
         label: 'Function',
         properties: {
-          name: 'end',
-          filePath: 'src/end.ts',
+          name: 'c',
+          filePath: 'src/c.ts',
           startLine: 1,
           endLine: 5,
           isExported: true,
@@ -557,31 +569,30 @@ describe('processProcesses', () => {
         id: 'hm1',
         type: 'HAS_METHOD',
         sourceId: 'class:BadSvc',
-        targetId: 'method:run',
+        targetId: 'method:b',
         confidence: 1,
         reason: 'parse',
       });
-      graph.addRelationship({
-        id: 'c1',
-        type: 'CALLS',
-        sourceId: 'func:main',
-        targetId: 'method:run',
-        confidence: 0.9,
-        reason: 'test',
-      });
-      graph.addRelationship({
-        id: 'c2',
-        type: 'CALLS',
-        sourceId: 'method:run',
-        targetId: 'func:end',
-        confidence: 0.9,
-        reason: 'test',
-      });
+      for (const [id, tid] of [
+        ['call:ma', 'func:a'],
+        ['call:mb', 'method:b'],
+        ['call:mc', 'func:c'],
+      ] as const) {
+        graph.addRelationship({
+          id,
+          type: 'CALLS',
+          sourceId: 'func:main',
+          targetId: tid,
+          confidence: 0.9,
+          reason: 'test',
+        });
+      }
 
       const memberships: CommunityMembership[] = [
         { nodeId: 'func:main', communityId: 'c0' },
-        { nodeId: 'method:run', communityId: 'c0' },
-        { nodeId: 'func:end', communityId: 'c0' },
+        { nodeId: 'func:a', communityId: 'c0' },
+        { nodeId: 'method:b', communityId: 'c0' },
+        { nodeId: 'func:c', communityId: 'c0' },
       ];
 
       const filter = { filePatterns: [], classPatterns: ['BadSvc'] };
@@ -589,15 +600,16 @@ describe('processProcesses', () => {
         graph,
         memberships,
         undefined,
-        { minSteps: 2, maxProcesses: 20 },
+        { minSteps: 2, maxProcesses: 20, maxBranching: 4 },
         filter,
       );
 
-      expect(result.processes.length).toBeGreaterThanOrEqual(1);
-      const proc = result.processes.find(p => p.entryPointId === 'func:main');
-      expect(proc).toBeDefined();
-      expect(proc!.trace).toEqual(['func:main', 'func:end']);
-      expect(proc!.trace.includes('method:run')).toBe(false);
+      const fromMain = result.processes.filter(p => p.entryPointId === 'func:main');
+      expect(fromMain.length).toBeGreaterThanOrEqual(2);
+      const terminals = new Set(fromMain.map(p => p.terminalId));
+      expect(terminals.has('func:a')).toBe(true);
+      expect(terminals.has('func:c')).toBe(true);
+      expect(fromMain.some(p => p.trace.includes('method:b'))).toBe(false);
     });
 
     it('CLASS does not remove Function-only processes', async () => {
