@@ -128,7 +128,7 @@ describe('pipeline end-to-end', () => {
 
     // Each process should have valid structure
     expect(proc.id).toBeTruthy();
-    expect(proc.stepCount).toBeGreaterThanOrEqual(3); // minSteps default
+    expect(proc.stepCount).toBeGreaterThanOrEqual(4); // pipeline.ts serverProcessDetectionConfig.minSteps
     expect(proc.trace.length).toBe(proc.stepCount);
     expect(proc.entryPointId).toBeTruthy();
     expect(proc.terminalId).toBeTruthy();

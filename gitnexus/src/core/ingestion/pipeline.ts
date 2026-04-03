@@ -468,6 +468,13 @@ export const runPipelineFromRepo = async (
     graph.forEachNode(n => { if (n.label !== 'File') symbolCount++; });
     const dynamicMaxProcesses = Math.max(20, Math.min(600, Math.round(symbolCount / 10)));
 
+    /** CLI / serve（`runPipelineFromRepo`）服务端分析时的 Process 检测参数；与 `process-processor` 库默认值可不同。 */
+    const serverProcessDetectionConfig = {
+      maxProcesses: dynamicMaxProcesses,
+      minSteps: 4,
+      maxBranching: 5,
+    };
+
     const processResult = await processProcesses(
       graph,
       communityResult.memberships,
@@ -480,7 +487,7 @@ export const runPipelineFromRepo = async (
           stats: { filesProcessed: totalFiles, totalFiles, nodesCreated: graph.nodeCount },
         });
       },
-      { maxProcesses: dynamicMaxProcesses, minSteps: 3 }
+      serverProcessDetectionConfig
     );
 
     if (isDev) {
