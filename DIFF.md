@@ -81,6 +81,9 @@
 38. **gitnexus/test/unit/method-signature.test.ts** — 重载 hash、默认参与指纹、类内外一致；5 形参+末尾默认的 `minimumParameterCount`；类外定义无 min。
 39. **gitnexus/test/unit/symbol-table.test.ts** — 重载与 `lookupExactAllFull`；`minimumParameterCount` 头/源注册顺序合并。
 40. **gitnexus/test/unit/type-env.test.ts** — Mock `lookupExactAllFull`。
+41. **docs/CXX_PROCESS_TRACE_FUNCTION_METHOD.md** — C++ Process 追踪仅沿 `Function`/`Method` 扩展 `CALLS`；背景、目标、`getCalleesForProcessTrace` 与入口/BFS 一致性；与 `DIFF.md` 交叉引用。
+42. **ingestion/process-processor.ts** — C++（`language === cpp`）时 `getCalleesForProcessTrace` 过滤出边目标为 `Function`|`Method`；`findEntryPoints` 与 `traceFromEntryPoint` 共用；非 C++ 不变。
+43. **gitnexus/test/unit/process-processor.test.ts** — C++ 同时 `CALLS→Macro` 与 `CALLS→Function` 时 trace 不含 Macro。
 
 #### 六、gitnexus-web/src/lib
 
@@ -151,5 +154,5 @@
 8. **llm/types.ts - 大模型递归次数限制可配置**
 9. **lbug/csv-generator.ts - 文件截断大小优化；File 节点 MAX_FILE_CONTENT 200000→600000（与 CLI 侧及 read 工具上限对齐）**
 10. **ingestion/tree-sitter-queries.ts - C++类名声明解析优化, 排除构造函数及前向声明; CPP_QUERIES补全类内方法声明捕获规则（field_identifier、pointer_declarator、析构函数declaration）**
-
+11. **ingestion/process-processor.ts** — 与 `gitnexus` 对齐：C++ 流程 `getCalleesForProcessTrace`（仅 `Function`/`Method`）；`findEntryPoints`/`traceFromEntryPoint` 传 `nodeMap`；移除未使用 `visited`。
 

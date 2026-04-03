@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { processProcesses, type ProcessDetectionConfig } from '../../src/core/ingestion/process-processor.js';
 import { createKnowledgeGraph } from '../../src/core/graph/graph.js';
 import type { CommunityMembership } from '../../src/core/ingestion/community-processor.js';
+import { SupportedLanguages } from '../../src/config/supported-languages.js';
 
 describe('processProcesses', () => {
   it('detects no processes in empty graph', async () => {
@@ -200,6 +201,75 @@ describe('processProcesses', () => {
     // Test files should not be used as entry points
     const testProcess = result.processes.find(p => p.entryPointId === 'func:testMain');
     expect(testProcess).toBeUndefined();
+  });
+
+  it('C++ traces only follow Function/Method callees (skip Macro, etc.)', async () => {
+    const graph = createKnowledgeGraph();
+    const cpp = SupportedLanguages.CPlusPlus;
+
+    graph.addNode({
+      id: 'func:main', label: 'Function',
+      properties: {
+        name: 'main',
+        filePath: 'src/main.cpp',
+        language: cpp,
+        startLine: 1,
+        endLine: 10,
+        isExported: true,
+      },
+    });
+    graph.addNode({
+      id: 'macro:FOO', label: 'Macro',
+      properties: { name: 'FOO', filePath: 'src/main.cpp', language: cpp, startLine: 1, endLine: 2 },
+    });
+    graph.addNode({
+      id: 'func:real', label: 'Function',
+      properties: {
+        name: 'real',
+        filePath: 'src/main.cpp',
+        language: cpp,
+        startLine: 5,
+        endLine: 20,
+        isExported: true,
+      },
+    });
+    graph.addNode({
+      id: 'func:end', label: 'Function',
+      properties: {
+        name: 'end',
+        filePath: 'src/main.cpp',
+        language: cpp,
+        startLine: 22,
+        endLine: 30,
+        isExported: true,
+      },
+    });
+
+    graph.addRelationship({
+      id: 'call:1', sourceId: 'func:main', targetId: 'macro:FOO',
+      type: 'CALLS', confidence: 0.9, reason: '',
+    });
+    graph.addRelationship({
+      id: 'call:2', sourceId: 'func:main', targetId: 'func:real',
+      type: 'CALLS', confidence: 0.9, reason: '',
+    });
+    graph.addRelationship({
+      id: 'call:3', sourceId: 'func:real', targetId: 'func:end',
+      type: 'CALLS', confidence: 0.9, reason: '',
+    });
+
+    const memberships: CommunityMembership[] = [
+      { nodeId: 'func:main', communityId: 'community:0' },
+      { nodeId: 'macro:FOO', communityId: 'community:0' },
+      { nodeId: 'func:real', communityId: 'community:0' },
+      { nodeId: 'func:end', communityId: 'community:0' },
+    ];
+
+    const result = await processProcesses(graph, memberships);
+    const p = result.processes.find(x => x.entryPointId === 'func:main');
+    expect(p).toBeDefined();
+    expect(p!.trace).not.toContain('macro:FOO');
+    expect(p!.trace).toEqual(['func:main', 'func:real', 'func:end']);
   });
 
   it('filters out low-confidence calls (below 0.5)', async () => {

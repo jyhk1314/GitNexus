@@ -97,7 +97,7 @@ export const processProcesses = async (
   for (const n of knowledgeGraph.iterNodes()) nodeMap.set(n.id, n);
   
   // Step 1: Find entry points (functions that call others but have few callers)
-  const entryPoints = findEntryPoints(knowledgeGraph, reverseCallsEdges, callsEdges);
+  const entryPoints = findEntryPoints(knowledgeGraph, reverseCallsEdges, callsEdges, nodeMap);
   
   onProgress?.(`Found ${entryPoints.length} entry points, tracing flows...`, 20);
   
@@ -108,7 +108,7 @@ export const processProcesses = async (
   
   for (let i = 0; i < entryPoints.length && allTraces.length < cfg.maxProcesses * 2; i++) {
     const entryId = entryPoints[i];
-    const traces = traceFromEntryPoint(entryId, callsEdges, cfg);
+    const traces = traceFromEntryPoint(entryId, callsEdges, cfg, nodeMap);
     
     // Filter out traces that are too short
     traces.filter(t => t.length >= cfg.minSteps).forEach(t => allTraces.push(t));
@@ -219,6 +219,30 @@ type AdjacencyList = Map<string, string[]>;
  */
 const MIN_TRACE_CONFIDENCE = 0.5;
 
+/** C++ process tracing: from a C++ caller, only follow CALLS into Function/Method (not Macro/Class/…). */
+const CPP_TRACE_CALLEE_LABELS = new Set<NodeLabel>(['Function', 'Method']);
+
+const isCppSymbolNode = (n: GraphNode | undefined): boolean =>
+  n?.properties.language === SupportedLanguages.CPlusPlus;
+
+const isCppTraceableCallee = (n: GraphNode | undefined): boolean =>
+  !!n && CPP_TRACE_CALLEE_LABELS.has(n.label);
+
+/**
+ * Outgoing CALLS targets used for process detection. Non-C++ callers keep full adjacency;
+ * C++ callers only see Function/Method targets so traces stay semantically meaningful.
+ */
+const getCalleesForProcessTrace = (
+  sourceId: string,
+  callsEdges: AdjacencyList,
+  nodeMap: Map<string, GraphNode>,
+): string[] => {
+  const raw = callsEdges.get(sourceId) || [];
+  const src = nodeMap.get(sourceId);
+  if (!isCppSymbolNode(src)) return raw;
+  return raw.filter(tid => isCppTraceableCallee(nodeMap.get(tid)));
+};
+
 const buildCallsGraph = (graph: KnowledgeGraph): AdjacencyList => {
   const adj = new Map<string, string[]>();
   
@@ -262,7 +286,8 @@ const buildReverseCallsGraph = (graph: KnowledgeGraph): AdjacencyList => {
 const findEntryPoints = (
   graph: KnowledgeGraph, 
   reverseCallsEdges: AdjacencyList,
-  callsEdges: AdjacencyList
+  callsEdges: AdjacencyList,
+  nodeMap: Map<string, GraphNode>,
 ): string[] => {
   const symbolTypes = new Set<NodeLabel>(['Function', 'Method']);
   const entryPointCandidates: { 
@@ -280,7 +305,7 @@ const findEntryPoints = (
     if (isTestFile(filePath)) continue;
 
     const callers = reverseCallsEdges.get(node.id) || [];
-    const callees = callsEdges.get(node.id) || [];
+    const callees = getCalleesForProcessTrace(node.id, callsEdges, nodeMap);
 
     // Must have at least 1 outgoing call to trace forward
     if (callees.length === 0) continue;
@@ -338,7 +363,8 @@ const findEntryPoints = (
 const traceFromEntryPoint = (
   entryId: string,
   callsEdges: AdjacencyList,
-  config: ProcessDetectionConfig
+  config: ProcessDetectionConfig,
+  nodeMap: Map<string, GraphNode>,
 ): string[][] => {
   const traces: string[][] = [];
   
@@ -349,8 +375,8 @@ const traceFromEntryPoint = (
   while (queue.length > 0 && traces.length < config.maxBranching * 3) {
     const [currentId, path] = queue.shift()!;
     
-    // Get outgoing calls
-    const callees = callsEdges.get(currentId) || [];
+    // Get outgoing calls (C++ callers: Function/Method targets only)
+    const callees = getCalleesForProcessTrace(currentId, callsEdges, nodeMap);
     
     if (callees.length === 0) {
       // Terminal node - this is a complete trace
