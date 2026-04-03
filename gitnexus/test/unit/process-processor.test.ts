@@ -503,7 +503,7 @@ describe('processProcesses', () => {
       expect(result.processes.some(p => p.entryPointId === 'func:a')).toBe(false);
     });
 
-    it('CLASS drops the whole trace when a Method belongs to a matching class', async () => {
+    it('CLASS omits filtered-class Methods from the trace but keeps downstream callees on the same Process', async () => {
       const graph = createKnowledgeGraph();
 
       graph.addNode({
@@ -589,11 +589,15 @@ describe('processProcesses', () => {
         graph,
         memberships,
         undefined,
-        { minSteps: 3, maxProcesses: 20 },
+        { minSteps: 2, maxProcesses: 20 },
         filter,
       );
 
-      expect(result.processes.length).toBe(0);
+      expect(result.processes.length).toBeGreaterThanOrEqual(1);
+      const proc = result.processes.find(p => p.entryPointId === 'func:main');
+      expect(proc).toBeDefined();
+      expect(proc!.trace).toEqual(['func:main', 'func:end']);
+      expect(proc!.trace.includes('method:run')).toBe(false);
     });
 
     it('CLASS does not remove Function-only processes', async () => {

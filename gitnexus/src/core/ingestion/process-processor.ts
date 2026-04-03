@@ -122,7 +122,14 @@ export const processProcesses = async (
   
   for (let i = 0; i < entryPoints.length && allTraces.length < cfg.maxProcesses * 2; i++) {
     const entryId = entryPoints[i];
-    const traces = traceFromEntryPoint(entryId, callsEdges, cfg, nodeMap);
+    const traces = traceFromEntryPoint(
+      entryId,
+      callsEdges,
+      cfg,
+      nodeMap,
+      processFilter,
+      methodClassMap,
+    );
     
     // Filter out traces that are too short
     traces.filter(t => t.length >= cfg.minSteps).forEach(t => allTraces.push(t));
@@ -262,10 +269,10 @@ const shouldDropTraceForFilter = (
     return true;
   }
   if (filter.classPatterns.length === 0) return false;
-  for (const nodeId of trace) {
-    const n = nodeMap.get(nodeId);
-    if (n?.label !== 'Method') continue;
-    const className = methodClassMap.get(nodeId);
+  /** CLASS: middle hops skip filtered Methods in BFS; only entry can still be a filtered-class Method. */
+  const n0 = nodeMap.get(trace[0]);
+  if (n0?.label === 'Method') {
+    const className = methodClassMap.get(trace[0]);
     if (
       className &&
       classNameMatchesProcessFilter(className, filter.classPatterns)
@@ -311,6 +318,58 @@ const getCalleesForProcessTrace = (
   const src = nodeMap.get(sourceId);
   if (!isCppSymbolNode(src)) return raw;
   return raw.filter(tid => isCppTraceableCallee(nodeMap.get(tid)));
+};
+
+/** True if this Method node's owning class matches CLASS filter patterns. */
+const isMethodFilteredByClass = (
+  nodeId: string,
+  nodeMap: Map<string, GraphNode>,
+  filter: ProcessFilterConfig | undefined,
+  methodClassMap: Map<string, string>,
+): boolean => {
+  if (!filter || filter.classPatterns.length === 0) return false;
+  const n = nodeMap.get(nodeId);
+  if (n?.label !== 'Method') return false;
+  const cn = methodClassMap.get(nodeId);
+  return !!(cn && classNameMatchesProcessFilter(cn, filter.classPatterns));
+};
+
+/**
+ * Resolve one CALLS hop when the direct callee may be a filtered-class Method: do not keep that
+ * node in the trace; walk forward along CALLS through consecutive filtered-class Methods until
+ * a visible callee, then return those targets for path extension.
+ */
+const collectTargetsSkippingFilteredClassMethods = (
+  calleeId: string,
+  callsEdges: AdjacencyList,
+  nodeMap: Map<string, GraphNode>,
+  filter: ProcessFilterConfig,
+  methodClassMap: Map<string, string>,
+  path: string[],
+  branchBudget: number,
+): string[] => {
+  if (branchBudget <= 0) return [];
+  if (!isMethodFilteredByClass(calleeId, nodeMap, filter, methodClassMap)) {
+    if (path.includes(calleeId)) return [];
+    return [calleeId];
+  }
+  const results: string[] = [];
+  const stack: string[] = [...getCalleesForProcessTrace(calleeId, callsEdges, nodeMap)].reverse();
+  const seen = new Set<string>();
+
+  while (stack.length > 0 && results.length < branchBudget) {
+    const nid = stack.pop()!;
+    if (path.includes(nid) || seen.has(nid)) continue;
+    seen.add(nid);
+
+    if (!isMethodFilteredByClass(nid, nodeMap, filter, methodClassMap)) {
+      results.push(nid);
+      continue;
+    }
+    const outs = getCalleesForProcessTrace(nid, callsEdges, nodeMap);
+    for (let i = outs.length - 1; i >= 0; i--) stack.push(outs[i]);
+  }
+  return results;
 };
 
 const buildCallsGraph = (graph: KnowledgeGraph): AdjacencyList => {
@@ -438,12 +497,18 @@ const findEntryPoints = (
 /**
  * Trace forward from an entry point using BFS.
  * Returns all distinct paths up to maxDepth.
+ *
+ * When `PROCESS.CLASS` patterns are set, Methods whose class matches are **not** included in the
+ * trace; CALLS are followed through them so downstream symbols (e.g. C after filtered B) can
+ * still appear in the same Process.
  */
 const traceFromEntryPoint = (
   entryId: string,
   callsEdges: AdjacencyList,
   config: ProcessDetectionConfig,
   nodeMap: Map<string, GraphNode>,
+  processFilter?: ProcessFilterConfig,
+  methodClassMap?: Map<string, string>,
 ): string[][] => {
   const traces: string[][] = [];
   
@@ -471,15 +536,38 @@ const traceFromEntryPoint = (
       // Continue tracing - limit branching
       const limitedCallees = callees.slice(0, config.maxBranching);
       let addedBranch = false;
-      
+      let remaining = config.maxBranching;
+      const useClassSkip =
+        processFilter &&
+        methodClassMap &&
+        processFilter.classPatterns.length > 0;
+
       for (const calleeId of limitedCallees) {
-        // Avoid cycles
-        if (!path.includes(calleeId)) {
-          queue.push([calleeId, [...path, calleeId]]);
-          addedBranch = true;
+        if (remaining <= 0) break;
+        const targets = useClassSkip
+          ? collectTargetsSkippingFilteredClassMethods(
+              calleeId,
+              callsEdges,
+              nodeMap,
+              processFilter,
+              methodClassMap,
+              path,
+              remaining,
+            )
+          : path.includes(calleeId)
+            ? []
+            : [calleeId];
+
+        for (const targetId of targets) {
+          if (remaining <= 0) break;
+          if (!path.includes(targetId)) {
+            queue.push([targetId, [...path, targetId]]);
+            addedBranch = true;
+            remaining--;
+          }
         }
       }
-      
+
       // If all branches were cycles, save current path as terminal
       if (!addedBranch && path.length >= config.minSteps) {
         traces.push([...path]);
