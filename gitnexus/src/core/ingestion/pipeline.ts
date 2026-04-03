@@ -472,8 +472,9 @@ export const runPipelineFromRepo = async (
     /** CLI / serve（`runPipelineFromRepo`）服务端分析时的 Process 检测参数；与 `process-processor` 库默认值可不同。 */
     const serverProcessDetectionConfig = {
       maxProcesses: dynamicMaxProcesses,
-      minSteps: 4,
-      maxBranching: 20,
+      minSteps: 5,
+      maxBranching: 30,
+      maxTraceDepth: 25
     };
 
     const processFilter = loadGitNexusFilter(repoPath);
