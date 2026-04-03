@@ -7,6 +7,7 @@ import { processCalls } from './call-processor';
 import { processHeritage } from './heritage-processor';
 import { processCommunities, CommunityDetectionResult } from './community-processor';
 import { processProcesses, ProcessDetectionResult } from './process-processor';
+import { parseProcessFilterFromJson } from './gitnexus-filter';
 import { createSymbolTable } from './symbol-table';
 import { createASTCache } from './ast-cache';
 import { PipelineProgress, PipelineResult } from '../../types/pipeline';
@@ -229,6 +230,13 @@ export const runPipelineFromFiles = async (
     stats: { filesProcessed: files.length, totalFiles: files.length, nodesCreated: graph.nodeCount },
   });
 
+  const filterEntry = files.find(
+    f => f.path === 'gitnexus.filter' || /(^|\/)gitnexus\.filter$/.test(f.path.replace(/\\/g, '/')),
+  );
+  const processFilter = filterEntry
+    ? parseProcessFilterFromJson(filterEntry.content)
+    : undefined;
+
   const processResult = await processProcesses(
     graph,
     communityResult.memberships,
@@ -240,7 +248,9 @@ export const runPipelineFromFiles = async (
         message,
         stats: { filesProcessed: files.length, totalFiles: files.length, nodesCreated: graph.nodeCount },
       });
-    }
+    },
+    {},
+    processFilter,
   );
 
   // Log process detection results

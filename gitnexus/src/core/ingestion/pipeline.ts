@@ -16,6 +16,7 @@ import { processHeritage, processHeritageFromExtracted } from './heritage-proces
 import { computeMRO } from './mro-processor.js';
 import { processCommunities } from './community-processor.js';
 import { processProcesses } from './process-processor.js';
+import { loadGitNexusFilter } from './gitnexus-filter.js';
 import { createResolutionContext } from './resolution-context.js';
 import { createASTCache } from './ast-cache.js';
 import { PipelineProgress, PipelineResult } from '../../types/pipeline.js';
@@ -475,6 +476,8 @@ export const runPipelineFromRepo = async (
       maxBranching: 5,
     };
 
+    const processFilter = loadGitNexusFilter(repoPath);
+
     const processResult = await processProcesses(
       graph,
       communityResult.memberships,
@@ -487,7 +490,8 @@ export const runPipelineFromRepo = async (
           stats: { filesProcessed: totalFiles, totalFiles, nodesCreated: graph.nodeCount },
         });
       },
-      serverProcessDetectionConfig
+      serverProcessDetectionConfig,
+      processFilter,
     );
 
     if (isDev) {

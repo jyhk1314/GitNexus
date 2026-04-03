@@ -14,6 +14,13 @@ import { KnowledgeGraph, GraphNode, GraphRelationship, NodeLabel } from '../grap
 import { SupportedLanguages } from '../../config/supported-languages';
 import { CommunityMembership } from './community-processor';
 import { calculateEntryPointScore, isTestFile } from './entry-point-scoring';
+import {
+  type ProcessFilterConfig,
+  filePathMatchesProcessFilter,
+  classNameMatchesProcessFilter,
+} from './gitnexus-filter';
+
+export type { ProcessFilterConfig } from './gitnexus-filter';
 
 // ============================================================================
 // CONFIGURATION
@@ -79,7 +86,8 @@ export const processProcesses = async (
   knowledgeGraph: KnowledgeGraph,
   memberships: CommunityMembership[],
   onProgress?: (message: string, progress: number) => void,
-  config: Partial<ProcessDetectionConfig> = {}
+  config: Partial<ProcessDetectionConfig> = {},
+  processFilter?: ProcessFilterConfig,
 ): Promise<ProcessDetectionResult> => {
   const cfg = { ...DEFAULT_CONFIG, ...config };
   
@@ -93,11 +101,17 @@ export const processProcesses = async (
   const reverseCallsEdges = buildReverseCallsGraph(knowledgeGraph);
   const nodeMap = new Map<string, GraphNode>();
   knowledgeGraph.nodes.forEach(n => nodeMap.set(n.id, n));
+
+  const methodClassMap = buildMethodToClassNameMap(knowledgeGraph);
   
   // Step 1: Find entry points (functions that call others but have few callers)
-  const entryPoints = findEntryPoints(knowledgeGraph, reverseCallsEdges, callsEdges, nodeMap);
-  
-  onProgress?.(`Found ${entryPoints.length} entry points, tracing flows...`, 20);
+  const entryPoints = findEntryPoints(
+    knowledgeGraph,
+    reverseCallsEdges,
+    callsEdges,
+    nodeMap,
+    processFilter,
+  );
   
   onProgress?.(`Found ${entryPoints.length} entry points, tracing flows...`, 20);
   
@@ -125,14 +139,23 @@ export const processProcesses = async (
   const limitedTraces = uniqueTraces
     .sort((a, b) => b.length - a.length)
     .slice(0, cfg.maxProcesses);
+
+  const tracesAfterFilter =
+    processFilter &&
+    (processFilter.filePatterns.length > 0 || processFilter.classPatterns.length > 0)
+      ? limitedTraces.filter(
+          trace =>
+            !shouldDropTraceForFilter(trace, nodeMap, processFilter, methodClassMap),
+        )
+      : limitedTraces;
   
-  onProgress?.(`Creating ${limitedTraces.length} process nodes...`, 80);
+  onProgress?.(`Creating ${tracesAfterFilter.length} process nodes...`, 80);
   
   // Step 5: Create process nodes
   const processes: ProcessNode[] = [];
   const steps: ProcessStep[] = [];
   
-  limitedTraces.forEach((trace, idx) => {
+  tracesAfterFilter.forEach((trace, idx) => {
     const entryPointId = trace[0];
     const terminalId = trace[trace.length - 1];
     
@@ -197,6 +220,54 @@ export const processProcesses = async (
       entryPointsFound: entryPoints.length,
     },
   };
+};
+
+// ============================================================================
+// PROCESS filter: Method → owning Class (HAS_METHOD: Class → Method)
+// ============================================================================
+
+const buildMethodToClassNameMap = (graph: KnowledgeGraph): Map<string, string> => {
+  const byId = new Map(graph.nodes.map(n => [n.id, n]));
+  const map = new Map<string, string>();
+  for (const rel of graph.relationships) {
+    if (rel.type !== 'HAS_METHOD') continue;
+    const cls = byId.get(rel.sourceId);
+    if (cls?.label !== 'Class') continue;
+    const name = cls.properties.name;
+    if (typeof name === 'string' && name.length > 0) {
+      map.set(rel.targetId, name);
+    }
+  }
+  return map;
+};
+
+const shouldDropTraceForFilter = (
+  trace: string[],
+  nodeMap: Map<string, GraphNode>,
+  filter: ProcessFilterConfig,
+  methodClassMap: Map<string, string>,
+): boolean => {
+  const entry = nodeMap.get(trace[0]);
+  const entryPath = entry?.properties.filePath || '';
+  if (
+    filter.filePatterns.length > 0 &&
+    filePathMatchesProcessFilter(entryPath, filter.filePatterns)
+  ) {
+    return true;
+  }
+  if (filter.classPatterns.length === 0) return false;
+  for (const nodeId of trace) {
+    const n = nodeMap.get(nodeId);
+    if (n?.label !== 'Method') continue;
+    const className = methodClassMap.get(nodeId);
+    if (
+      className &&
+      classNameMatchesProcessFilter(className, filter.classPatterns)
+    ) {
+      return true;
+    }
+  }
+  return false;
 };
 
 // ============================================================================
@@ -270,6 +341,7 @@ const findEntryPoints = (
   reverseCallsEdges: AdjacencyList,
   callsEdges: AdjacencyList,
   nodeMap: Map<string, GraphNode>,
+  processFilter?: ProcessFilterConfig,
 ): string[] => {
   const symbolTypes = new Set<NodeLabel>(['Function', 'Method']);
   const entryPointCandidates: { 
@@ -282,6 +354,14 @@ const findEntryPoints = (
     if (!symbolTypes.has(node.label)) return;
     
     const filePath = node.properties.filePath || '';
+
+    if (
+      processFilter &&
+      processFilter.filePatterns.length > 0 &&
+      filePathMatchesProcessFilter(filePath, processFilter.filePatterns)
+    ) {
+      return;
+    }
     
     // Skip test files entirely
     if (isTestFile(filePath)) return;

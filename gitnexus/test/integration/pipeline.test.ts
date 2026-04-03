@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
+import fsSync from 'node:fs';
 import { runPipelineFromRepo } from '../../src/core/ingestion/pipeline.js';
 import type { PipelineProgress } from '../../src/types/pipeline.js';
 import type { PipelineResult } from '../../src/types/pipeline.js';
@@ -165,6 +166,20 @@ describe('pipeline end-to-end', () => {
   it('returns correct repoPath in result', () => {
     expect(result.repoPath).toBe(MINI_REPO);
   });
+});
+
+describe('pipeline with gitnexus.filter', () => {
+  it('invalid gitnexus.filter JSON does not crash analysis', async () => {
+    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'gn-pipeline-filter-'));
+    try {
+      fsSync.cpSync(MINI_REPO, dir, { recursive: true });
+      fsSync.writeFileSync(path.join(dir, 'gitnexus.filter'), '{', 'utf8');
+      const r = await runPipelineFromRepo(dir, () => {});
+      expect(r.graph.nodeCount).toBeGreaterThan(0);
+    } finally {
+      fsSync.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 90000);
 });
 
 // ─── Pipeline error handling ──────────────────────────────────────────

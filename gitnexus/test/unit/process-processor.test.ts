@@ -428,4 +428,239 @@ describe('processProcesses', () => {
     expect(result.processes.length).toBeLessThanOrEqual(3);
     expect(result.stats.totalProcesses).toBeLessThanOrEqual(3);
   });
+
+  describe('PROCESS filter (gitnexus.filter)', () => {
+    it('FILE removes entry points in matching files and drops their traces', async () => {
+      const graph = createKnowledgeGraph();
+      graph.addNode({
+        id: 'func:a',
+        label: 'Function',
+        properties: {
+          name: 'a',
+          filePath: 'src/a.ts',
+          startLine: 1,
+          endLine: 5,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addNode({
+        id: 'func:b',
+        label: 'Function',
+        properties: {
+          name: 'b',
+          filePath: 'src/b.ts',
+          startLine: 1,
+          endLine: 5,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addNode({
+        id: 'func:c',
+        label: 'Function',
+        properties: {
+          name: 'c',
+          filePath: 'src/c.ts',
+          startLine: 1,
+          endLine: 5,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addRelationship({
+        id: 'call:1',
+        sourceId: 'func:a',
+        targetId: 'func:b',
+        type: 'CALLS',
+        confidence: 0.9,
+        reason: '',
+      });
+      graph.addRelationship({
+        id: 'call:2',
+        sourceId: 'func:b',
+        targetId: 'func:c',
+        type: 'CALLS',
+        confidence: 0.9,
+        reason: '',
+      });
+
+      const memberships: CommunityMembership[] = [
+        { nodeId: 'func:a', communityId: 'community:0' },
+        { nodeId: 'func:b', communityId: 'community:0' },
+        { nodeId: 'func:c', communityId: 'community:0' },
+      ];
+
+      const filter = { filePatterns: ['a.ts'], classPatterns: [] };
+      const result = await processProcesses(
+        graph,
+        memberships,
+        undefined,
+        { minSteps: 3 },
+        filter,
+      );
+
+      expect(result.processes.some(p => p.entryPointId === 'func:a')).toBe(false);
+    });
+
+    it('CLASS drops the whole trace when a Method belongs to a matching class', async () => {
+      const graph = createKnowledgeGraph();
+
+      graph.addNode({
+        id: 'func:main',
+        label: 'Function',
+        properties: {
+          name: 'main',
+          filePath: 'src/main.ts',
+          startLine: 1,
+          endLine: 10,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addNode({
+        id: 'class:BadSvc',
+        label: 'Class',
+        properties: {
+          name: 'BadSvc',
+          filePath: 'src/svc.ts',
+          startLine: 1,
+          endLine: 20,
+        },
+      });
+      graph.addNode({
+        id: 'method:run',
+        label: 'Method',
+        properties: {
+          name: 'run',
+          filePath: 'src/svc.ts',
+          startLine: 5,
+          endLine: 8,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addNode({
+        id: 'func:end',
+        label: 'Function',
+        properties: {
+          name: 'end',
+          filePath: 'src/end.ts',
+          startLine: 1,
+          endLine: 5,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+
+      graph.addRelationship({
+        id: 'hm1',
+        type: 'HAS_METHOD',
+        sourceId: 'class:BadSvc',
+        targetId: 'method:run',
+        confidence: 1,
+        reason: 'parse',
+      });
+      graph.addRelationship({
+        id: 'c1',
+        type: 'CALLS',
+        sourceId: 'func:main',
+        targetId: 'method:run',
+        confidence: 0.9,
+        reason: 'test',
+      });
+      graph.addRelationship({
+        id: 'c2',
+        type: 'CALLS',
+        sourceId: 'method:run',
+        targetId: 'func:end',
+        confidence: 0.9,
+        reason: 'test',
+      });
+
+      const memberships: CommunityMembership[] = [
+        { nodeId: 'func:main', communityId: 'c0' },
+        { nodeId: 'method:run', communityId: 'c0' },
+        { nodeId: 'func:end', communityId: 'c0' },
+      ];
+
+      const filter = { filePatterns: [], classPatterns: ['BadSvc'] };
+      const result = await processProcesses(
+        graph,
+        memberships,
+        undefined,
+        { minSteps: 3, maxProcesses: 20 },
+        filter,
+      );
+
+      expect(result.processes.length).toBe(0);
+    });
+
+    it('CLASS does not remove Function-only processes', async () => {
+      const graph = createKnowledgeGraph();
+      graph.addNode({
+        id: 'func:handleRequest',
+        label: 'Function',
+        properties: {
+          name: 'handleRequest',
+          filePath: 'src/handler.ts',
+          startLine: 1,
+          endLine: 10,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addNode({
+        id: 'func:validateInput',
+        label: 'Function',
+        properties: {
+          name: 'validateInput',
+          filePath: 'src/validator.ts',
+          startLine: 1,
+          endLine: 5,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addNode({
+        id: 'func:saveToDb',
+        label: 'Function',
+        properties: {
+          name: 'saveToDb',
+          filePath: 'src/db.ts',
+          startLine: 1,
+          endLine: 8,
+          isExported: true,
+          language: SupportedLanguages.JavaScript,
+        },
+      });
+      graph.addRelationship({
+        id: 'call:1',
+        sourceId: 'func:handleRequest',
+        targetId: 'func:validateInput',
+        type: 'CALLS',
+        confidence: 0.9,
+        reason: 'import-resolved',
+      });
+      graph.addRelationship({
+        id: 'call:2',
+        sourceId: 'func:validateInput',
+        targetId: 'func:saveToDb',
+        type: 'CALLS',
+        confidence: 0.9,
+        reason: 'import-resolved',
+      });
+
+      const memberships: CommunityMembership[] = [
+        { nodeId: 'func:handleRequest', communityId: 'community:0' },
+        { nodeId: 'func:validateInput', communityId: 'community:0' },
+        { nodeId: 'func:saveToDb', communityId: 'community:0' },
+      ];
+
+      const filter = { filePatterns: [], classPatterns: ['GhostClass'] };
+      const result = await processProcesses(graph, memberships, undefined, { minSteps: 3 }, filter);
+
+      expect(result.processes.length).toBeGreaterThan(0);
+    });
+  });
 });
