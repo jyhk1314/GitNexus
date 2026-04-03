@@ -335,13 +335,11 @@ const isMethodFilteredByClass = (
 };
 
 /**
- * Resolve one CALLS hop when the direct callee may be a filtered-class Method: do not keep that
- * node in the trace; walk forward along CALLS through consecutive filtered-class Methods until
- * a visible callee, then return those targets for path extension.
+ * CLASS 过滤：若这一跳的直接 callee 是命中规则的 Method，则**不沿这条边扩展**（不进入 B）。
+ * 例如 `main→A`、`main→B`、`main→B` 为过滤类时只丢掉 `main→B`，`main→A` / `main→C` 各自独立。
  */
 const collectTargetsSkippingFilteredClassMethods = (
   calleeId: string,
-  callsEdges: AdjacencyList,
   nodeMap: Map<string, GraphNode>,
   filter: ProcessFilterConfig,
   methodClassMap: Map<string, string>,
@@ -349,27 +347,11 @@ const collectTargetsSkippingFilteredClassMethods = (
   branchBudget: number,
 ): string[] => {
   if (branchBudget <= 0) return [];
-  if (!isMethodFilteredByClass(calleeId, nodeMap, filter, methodClassMap)) {
-    if (path.includes(calleeId)) return [];
-    return [calleeId];
+  if (isMethodFilteredByClass(calleeId, nodeMap, filter, methodClassMap)) {
+    return [];
   }
-  const results: string[] = [];
-  const stack: string[] = [...getCalleesForProcessTrace(calleeId, callsEdges, nodeMap)].reverse();
-  const seen = new Set<string>();
-
-  while (stack.length > 0 && results.length < branchBudget) {
-    const nid = stack.pop()!;
-    if (path.includes(nid) || seen.has(nid)) continue;
-    seen.add(nid);
-
-    if (!isMethodFilteredByClass(nid, nodeMap, filter, methodClassMap)) {
-      results.push(nid);
-      continue;
-    }
-    const outs = getCalleesForProcessTrace(nid, callsEdges, nodeMap);
-    for (let i = outs.length - 1; i >= 0; i--) stack.push(outs[i]);
-  }
-  return results;
+  if (path.includes(calleeId)) return [];
+  return [calleeId];
 };
 
 const buildCallsGraph = (graph: KnowledgeGraph): AdjacencyList => {
@@ -498,9 +480,7 @@ const findEntryPoints = (
  * Trace forward from an entry point using BFS.
  * Returns all distinct paths up to maxDepth.
  *
- * When `PROCESS.CLASS` patterns are set, Methods whose class matches are **not** included in the
- * trace; CALLS are followed through them so downstream symbols (e.g. C after filtered B) can
- * still appear in the same Process.
+ * `PROCESS.CLASS`：命中规则的 Method 作为直接 callee 时不扩展该分支，其它出边不受影响。
  */
 const traceFromEntryPoint = (
   entryId: string,
@@ -547,7 +527,6 @@ const traceFromEntryPoint = (
         const targets = useClassSkip
           ? collectTargetsSkippingFilteredClassMethods(
               calleeId,
-              callsEdges,
               nodeMap,
               processFilter,
               methodClassMap,
