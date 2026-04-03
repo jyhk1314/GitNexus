@@ -45,6 +45,7 @@ describe('pipeline end-to-end', () => {
     expect(fileNodes).toContain('src/formatter.ts');
     expect(fileNodes).toContain('src/index.ts');
     expect(fileNodes).toContain('src/logger.ts');
+    expect(fileNodes).toContain('src/long-chain.ts');
     expect(fileNodes).toContain('src/middleware.ts');
 
     // --- Verify symbol nodes were created (functions, classes) ---
@@ -142,7 +143,7 @@ describe('pipeline end-to-end', () => {
     // STEP_IN_PROCESS relationships should exist with sequential ordering
     const steps: number[] = [];
     for (const rel of result.graph.iterRelationships()) {
-      if (rel.type === 'STEP_IN_PROCESS' && rel.targetId === proc.id) {
+      if (rel.type === 'STEP_IN_PROCESS' && rel.targetId === proc.id && rel.step !== undefined) {
         steps.push(rel.step);
       }
     }
