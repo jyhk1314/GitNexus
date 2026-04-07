@@ -14,6 +14,7 @@
  */
 
 import fs from 'fs/promises';
+import path from 'path';
 import lbug from '@ladybugdb/core';
 
 /** Per-repo pool: one Database, many Connections */
@@ -349,6 +350,29 @@ export const executeParameterized = async (
     return rows;
   } finally {
     checkin(entry, conn);
+  }
+};
+
+/**
+ * Remove every pool entry (and shared DB cache slot when refCount reaches 0)
+ * for the given LadybugDB file path. Use before a full `gitnexus analyze --force`
+ * so analyze does not contend with MCP read-only handles.
+ */
+export const evictPoolsForDbPath = (dbPath: string): void => {
+  const normalized = path.resolve(dbPath);
+  const ids: string[] = [];
+  for (const [repoId, entry] of pool) {
+    if (path.resolve(entry.dbPath) === normalized) {
+      ids.push(repoId);
+    }
+  }
+  for (const id of ids) {
+    closeOne(id);
+  }
+  for (const [key, shared] of [...dbCache.entries()]) {
+    if (path.resolve(key) === normalized && shared.refCount <= 0) {
+      dbCache.delete(key);
+    }
   }
 };
 

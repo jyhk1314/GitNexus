@@ -18,6 +18,7 @@ import {
   cleanupOldKuzuFiles,
   type RegistryEntry,
 } from '../../storage/repo-manager.js';
+import { isRepoUnderMaintenance } from '../../maintenance/repo-maintenance.js';
 // AI context generation is CLI-only (gitnexus analyze)
 // import { generateAIContextFiles } from '../../cli/ai-context.js';
 
@@ -98,6 +99,13 @@ export class LocalBackend {
   async init(): Promise<boolean> {
     await this.refreshRepos();
     return this.repos.size > 0;
+  }
+
+  /**
+   * Re-read ~/.gitnexus/registry.json (e.g. after a background `gitnexus analyze`).
+   */
+  async reloadFromRegistry(): Promise<void> {
+    await this.refreshRepos();
   }
 
   /**
@@ -188,13 +196,20 @@ export class LocalBackend {
    * while the MCP server was running.
    */
   async resolveRepo(repoParam?: string): Promise<RepoHandle> {
+    const assertReady = (h: RepoHandle): RepoHandle => {
+      if (isRepoUnderMaintenance(h.name)) {
+        throw new Error(`Repository "${h.name}" is temporarily unavailable (re-indexing)`);
+      }
+      return h;
+    };
+
     const result = this.resolveRepoFromCache(repoParam);
-    if (result) return result;
+    if (result) return assertReady(result);
 
     // Miss — refresh registry and try once more
     await this.refreshRepos();
     const retried = this.resolveRepoFromCache(repoParam);
-    if (retried) return retried;
+    if (retried) return assertReady(retried);
 
     // Still no match — throw with helpful message
     if (this.repos.size === 0) {
@@ -282,7 +297,7 @@ export class LocalBackend {
    * Re-reads the global registry so newly indexed repos are discovered
    * without restarting the MCP server.
    */
-  async listRepos(): Promise<Array<{ name: string; path: string; indexedAt: string; lastCommit: string; stats?: any }>> {
+  async listRepos(): Promise<Array<{ name: string; path: string; indexedAt: string; lastCommit: string; stats?: any; maintenance?: boolean }>> {
     await this.refreshRepos();
     return [...this.repos.values()].map(h => ({
       name: h.name,
@@ -290,6 +305,7 @@ export class LocalBackend {
       indexedAt: h.indexedAt,
       lastCommit: h.lastCommit,
       stats: h.stats,
+      maintenance: isRepoUnderMaintenance(h.name),
     }));
   }
 

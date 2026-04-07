@@ -24,10 +24,13 @@ import { GraphNode, GraphRelationship } from '../core/graph/types.js';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
 import { isGitRepo } from '../storage/git.js';
+import { convertWorkspaceToUtf8 } from './utf8-conversion.js';
 // Embedding imports are lazy (dynamic import) to avoid loading onnxruntime-node
 // at server startup — crashes on unsupported Node ABI versions (#89)
 import { LocalBackend } from '../mcp/local/local-backend.js';
 import { mountMCPEndpoints } from './mcp-http.js';
+import { isRepoUnderMaintenance } from '../maintenance/repo-maintenance.js';
+import { parseNightlyAt, startNightlyRefreshScheduler } from './nightly-refresh.js';
 
 // Tables that require backticks in Cypher queries (matches schema definition)
 const BACKTICK_TABLES = new Set([
@@ -106,6 +109,7 @@ const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphR
 
 const statusFromError = (err: any): number => {
   const msg = String(err?.message ?? '');
+  if (msg.includes('temporarily unavailable') && msg.includes('re-indexing')) return 503;
   if (msg.includes('No indexed repositories') || msg.includes('not found')) return 404;
   if (msg.includes('Multiple repositories')) return 400;
   return 500;
@@ -122,7 +126,18 @@ const requestedRepo = (req: express.Request): string | undefined => {
   return undefined;
 };
 
-export const createServer = async (port: number, host: string = '127.0.0.1', opts?: { embeddings?: boolean }) => {
+const maintenanceJson = (res: express.Response, repoName: string) => {
+  res.status(503).json({
+    error: `Repository "${repoName}" is temporarily unavailable (scheduled re-index)`,
+    maintenance: true,
+  });
+};
+
+export const createServer = async (
+  port: number,
+  host: string = '127.0.0.1',
+  opts?: { embeddings?: boolean; nightlyRefresh?: boolean; nightlyAt?: string },
+) => {
   const app = express();
   const enableEmbeddings = !!opts?.embeddings;
 
@@ -355,42 +370,12 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         });
       });
 
-      // UTF-8转换阶段：percent 跟随克隆完成时的实际进度
-      send({ type: 'progress', phase: 'converting', percent: Math.max(lastClonePercent, 5) });
       const __dirnameServer = path.dirname(fileURLToPath(import.meta.url));
       const pkgRoot = path.resolve(__dirnameServer, '../..');
-      const scriptCandidates = [
-        path.resolve(pkgRoot, '..', 'convert_to_utf8.py'),
-        path.join(pkgRoot, 'scripts', 'convert_to_utf8.py'),
-      ];
-      const convertScript = scriptCandidates.find((p) => existsSync(p));
-      if (!convertScript) {
-        console.warn('[clone-analyze] UTF-8 conversion skipped: convert_to_utf8.py not found. Tried:', scriptCandidates.join(', '));
-      } else {
-        const pyCandidates = process.platform === 'win32'
-          ? ['python3', 'python', 'py']
-          : ['python3', 'python'];
-        let convertOk = false;
-        for (const py of pyCandidates) {
-          const convertResult = spawnSync(py, process.platform === 'win32' && py === 'py' ? ['-3', convertScript, targetPath] : [convertScript, targetPath], {
-            stdio: 'pipe',
-            encoding: 'utf-8',
-            shell: false,
-          });
-          const errObj = convertResult.error as NodeJS.ErrnoException | undefined;
-          if (errObj?.code === 'ENOENT') continue; // this python not in PATH
-          if (convertResult.status === 0) {
-            console.log('[clone-analyze] UTF-8 conversion done (via', py + ')');
-            convertOk = true;
-            break;
-          }
-          const err = (convertResult.stderr || convertResult.stdout || convertResult.error?.message || '').slice(0, 800);
-          console.warn('[clone-analyze] UTF-8 conversion failed with', py, ':', convertResult.status, err);
-        }
-        if (!convertOk) {
-          console.warn('[clone-analyze] GBK/other encodings were not converted to UTF-8. Install Python and ensure gitnexus/scripts/convert_to_utf8.py is available.');
-        }
-      }
+
+      // UTF-8转换阶段：percent 跟随克隆完成时的实际进度（与 convert_to_utf8.py 一致：GBK 等 → UTF-8）
+      send({ type: 'progress', phase: 'converting', percent: Math.max(lastClonePercent, 5) });
+      convertWorkspaceToUtf8(targetPath, '[clone-analyze]');
 
       console.log('[clone-analyze] -> starting analyze');
       send({ type: 'progress', phase: 'Scanning files', percent: 5 });
@@ -586,29 +571,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
           }
         }
 
+        convertWorkspaceToUtf8(targetPath, '[zip-upload-analyze]');
+
         const __dirnameServer = path.dirname(fileURLToPath(import.meta.url));
         const pkgRoot = path.resolve(__dirnameServer, '../..');
-        const scriptCandidates = [
-          path.resolve(pkgRoot, '..', 'convert_to_utf8.py'),
-          path.join(pkgRoot, 'scripts', 'convert_to_utf8.py'),
-        ];
-        const convertScript = scriptCandidates.find((p) => existsSync(p));
-        if (convertScript) {
-          const pyCandidates = process.platform === 'win32' ? ['python3', 'python', 'py'] : ['python3', 'python'];
-          for (const py of pyCandidates) {
-            const convertResult = spawnSync(
-              py,
-              process.platform === 'win32' && py === 'py' ? ['-3', convertScript, targetPath] : [convertScript, targetPath],
-              { stdio: 'pipe', encoding: 'utf-8', shell: false }
-            );
-            const errObj = convertResult.error as NodeJS.ErrnoException | undefined;
-            if (errObj?.code === 'ENOENT') continue;
-            if (convertResult.status === 0) {
-              console.log('[zip-upload-analyze] UTF-8 conversion done');
-              break;
-            }
-          }
-        }
 
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
@@ -703,6 +669,8 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       res.json(repos.map(r => ({
         name: r.name, path: r.path, indexedAt: r.indexedAt,
         lastCommit: r.lastCommit, stats: r.stats,
+        branch: r.branch,
+        maintenance: isRepoUnderMaintenance(r.name),
       })));
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to list repos' });
@@ -715,6 +683,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       const entry = await resolveRepo(requestedRepo(req));
       if (!entry) {
         res.status(404).json({ error: 'Repository not found. Run: gitnexus analyze' });
+        return;
+      }
+      if (isRepoUnderMaintenance(entry.name)) {
+        maintenanceJson(res, entry.name);
         return;
       }
       const meta = await loadMeta(entry.storagePath);
@@ -735,6 +707,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       const entry = await resolveRepo(requestedRepo(req));
       if (!entry) {
         res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+      if (isRepoUnderMaintenance(entry.name)) {
+        maintenanceJson(res, entry.name);
         return;
       }
       const lbugPath = path.join(entry.storagePath, 'lbug');
@@ -759,6 +735,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
+      if (isRepoUnderMaintenance(entry.name)) {
+        maintenanceJson(res, entry.name);
+        return;
+      }
       const lbugPath = path.join(entry.storagePath, 'lbug');
       const result = await withLbugDb(lbugPath, () => executeQuery(cypher));
       res.json({ result });
@@ -779,6 +759,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       const entry = await resolveRepo(requestedRepo(req));
       if (!entry) {
         res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+      if (isRepoUnderMaintenance(entry.name)) {
+        maintenanceJson(res, entry.name);
         return;
       }
       const lbugPath = path.join(entry.storagePath, 'lbug');
@@ -808,6 +792,10 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
       const entry = await resolveRepo(requestedRepo(req));
       if (!entry) {
         res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+      if (isRepoUnderMaintenance(entry.name)) {
+        maintenanceJson(res, entry.name);
         return;
       }
       const filePath = req.query.path as string;
@@ -961,6 +949,15 @@ export const createServer = async (port: number, host: string = '127.0.0.1', opt
   const server = app.listen(port, host, () => {
     console.log(`GitNexus server running on http://${host}:${port}`);
   });
+
+  if (opts?.nightlyRefresh) {
+    const { hour, minute } = parseNightlyAt(opts.nightlyAt);
+    startNightlyRefreshScheduler(backend, {
+      hour,
+      minute,
+      embeddings: !!enableEmbeddings,
+    });
+  }
 
   // Graceful shutdown — close Express + LadybugDB cleanly
   const shutdown = async () => {

@@ -42,6 +42,8 @@ export interface RegistryEntry {
   indexedAt: string;
   lastCommit: string;
   stats?: RepoMeta['stats'];
+  /** Optional: branch for nightly refresh / git sync (see git-nightly-sync.ts) */
+  branch?: string;
 }
 
 const GITNEXUS_DIR = '.gitnexus';
@@ -266,6 +268,10 @@ export const registerRepo = async (repoPath: string, meta: RepoMeta): Promise<vo
     lastCommit: meta.lastCommit,
     stats: meta.stats,
   };
+
+  if (existing >= 0 && entries[existing].branch) {
+    entry.branch = entries[existing].branch;
+  }
 
   if (existing >= 0) {
     entries[existing] = entry;

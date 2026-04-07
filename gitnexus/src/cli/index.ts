@@ -36,6 +36,8 @@ program
   .option('-p, --port <port>', 'Port number', '6660')
   .option('--host <host>', 'Bind address (default: 127.0.0.1, use 0.0.0.0 for remote access)')
   .option('--embeddings', 'Enable embeddings when clone-analyze runs (vector search)')
+  .option('--nightly-refresh', 'Daily git pull + analyze --force for each registered repo (local server time)')
+  .option('--nightly-at <hh:mm>', 'Clock time for nightly refresh (24h, default: 02:00)', '02:00')
   .action(createLazyAction(() => import('./serve.js'), 'serveCommand'));
 
 program
