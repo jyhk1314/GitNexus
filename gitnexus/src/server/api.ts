@@ -173,7 +173,7 @@ export const createServer = async (
   };
 
   // 一键下载并分析：代码目录 = HOME 或 启动路径，子目录 ginexus_code；已在 registry 则禁止重复下载
-  const GINEXUS_CODE_DIR = 'ginexus_code';
+  const GINEXUS_CODE_DIR = 'gitnexus_code';
   const getCodeBaseDir = (): string => process.env.HOME || process.cwd();
   const getCodeDir = (): string => path.join(getCodeBaseDir(), GINEXUS_CODE_DIR);
 
@@ -500,7 +500,7 @@ export const createServer = async (
     }
   });
 
-  // ZIP 上传并分析：接收 zip 文件，解压到 ginexus_code/{zip名}，执行 analyze（参考 clone-analyze）
+  // ZIP 上传并分析：接收 zip 文件，解压到 gitnexus_code/{zip名}，执行 analyze（参考 clone-analyze）
   app.post(
     '/api/repos/zip-upload-analyze',
     express.raw({ type: '*/*', limit: '500mb' }),

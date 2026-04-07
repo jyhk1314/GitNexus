@@ -58,7 +58,7 @@ export function normalizeServerUrl(input: string): string {
 }
 
 /**
- * 通过后端 clone-analyze 拉取并建索引，代码落在 serve 机器的 ginexus_code 目录。
+ * 通过后端 clone-analyze 拉取并建索引，代码落在 serve 机器的 gitnexus_code 目录。
  * 要求 serverBaseUrl 为能访问到 gitnexus serve 的地址（如 http://10.128.128.88:6660）。
  */
 export async function cloneAnalyzeOnServer(
@@ -135,7 +135,7 @@ export async function cloneAnalyzeOnServer(
 }
 
 /**
- * 通过后端 zip-upload-analyze 上传 ZIP 并建索引，代码落在 serve 机器的 ginexus_code 目录。
+ * 通过后端 zip-upload-analyze 上传 ZIP 并建索引，代码落在 serve 机器的 gitnexus_code 目录。
  * 要求 serverBaseUrl 为能访问到 gitnexus serve 的地址。
  */
 export async function uploadZipAnalyzeOnServer(

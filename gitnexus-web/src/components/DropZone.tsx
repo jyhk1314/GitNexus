@@ -361,7 +361,7 @@ export const DropZone = ({ onFileSelect, onLocalGitSubmit, onServerConnect, onZi
               私有 / 开源 Git 仓库
             </h2>
             <p className="text-sm text-text-secondary text-center mb-6">
-              填写服务地址（gitnexus serve）与 Git 仓库 URL、令牌；由服务端执行 clone-analyze，代码落在服务端 ginexus_code 目录。
+              填写服务地址（gitnexus serve）与 Git 仓库 URL、令牌；由服务端执行 clone-analyze，代码落在服务端 gitnexus_code 目录。
             </p>
 
             <div className="space-y-3" data-form-type="other">

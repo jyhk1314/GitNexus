@@ -29,7 +29,7 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
 
 - 将本地代码打成 ZIP，在 Web UI 中上传。
 - **代码保存位置**：本地浏览器（不经过服务器）。
-- **后端处理（可选）**：在 ZIP 选项上填写后端代理地址（如 `http://10.128.128.88:6660`），则会将 ZIP 上传到后端解压、分析、向量化，代码落在服务端 `ginexus_code/{压缩包名}`。已上传过的压缩包（按名称判断）会自动转为 Server 模式访问。
+- **后端处理（可选）**：在 ZIP 选项上填写后端代理地址（如 `http://10.128.128.88:6660`），则会将 ZIP 上传到后端解压、分析、向量化，代码落在服务端 `gitnexus_code/{压缩包名}`。已上传过的压缩包（按名称判断）会自动转为 Server 模式访问。
 
 ### 2. 访问公网 GitHub
 
@@ -41,7 +41,7 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
 - **填写服务地址**：必填，例如 `http://10.128.128.88:6660`（即运行 `gitnexus serve` 的机器地址与端口）。前端会调用该地址的 **clone-analyze** 接口，由服务端执行 clone + 分析。
 - **填写研发云仓库 Git 地址**：你的内网/研发云 Git 仓库 URL（HTTPS）。
 - **填写令牌**：在研发云仓库 → 应用菜单中申请令牌（私有仓库必填）。
-- **代码保存位置**：**服务端** `{HOME 或 cwd}/ginexus_code/{仓库名}`，不再在浏览器内拉取。
+- **代码保存位置**：**服务端** `{HOME 或 cwd}/gitnexus_code/{仓库名}`，不再在浏览器内拉取。
 - **GBK→UTF-8**：clone 完成后、建索引前，服务端会自动调用 `scripts/convert_to_utf8.py` 将仓库内文本转为 UTF-8。需在 **运行 serve 的机器** 上安装 **Python**，并确保 gitnexus 包内存在 `scripts/convert_to_utf8.py`。若未转成 UTF-8，请查看 serve 控制台 “UTF-8 conversion skipped” / “UTF-8 conversion failed” 日志。
 - **C++ Method 合并与解析顺序**：`.h`/`.cpp` 同 id 合并、实现文件覆盖节点展示位置，以及分析时可选的 `parse-order.log`（Local Git 下默认随 `GITNEXUS_PROGRESS` 写入克隆目录 `.gitnexus/`），见 **`docs/CXX_METHOD_MERGE_AND_PARSE_ORDER.md`**。
 
@@ -92,7 +92,7 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
 | 方式 | 主要配置 | 代码/索引所在 |
 |------|----------|----------------|
 | 上传 ZIP | 上传 ZIP 文件 | 浏览器本地 |
-| 上传 ZIP（后端） | 代理地址 + ZIP 文件 | 服务端 ginexus_code |
+| 上传 ZIP（后端） | 代理地址 + ZIP 文件 | 服务端 gitnexus_code |
 | 公网 GitHub | 填写 GitHub 地址 | 浏览器本地 |
 | Local Git | 服务地址 + Git 地址 + 令牌 | 代理服务（serve 机器） |
 | Server | 后端地址 + 仓库名称 | 后端服务（serve 机器） |
