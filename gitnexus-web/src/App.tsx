@@ -174,7 +174,7 @@ const AppContent = () => {
           const baseName = segs.length ? segs[segs.length - 1].replace(/\.git$/i, '') : undefined;
           if (baseName && branchTrimmed) {
             const branchSuffix = branchTrimmed.replace(/[^a-zA-Z0-9_\-]/g, '_');
-            return `${baseName}_${branchSuffix}`;
+            return `${baseName}@@${branchSuffix}`;
           }
           return baseName;
         } catch {

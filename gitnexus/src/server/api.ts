@@ -222,8 +222,8 @@ export const createServer = async (
       return;
     }
     const codeDir = getCodeDir();
-    // 若指定了分支，目录名加上分支后缀，避免同一仓库不同分支互相覆盖
-    const dirSuffix = branch ? `_${branch.replace(/[^a-zA-Z0-9_\-]/g, '_')}` : '';
+    // 若指定了分支，目录名用「@@」与分支后缀连接（全平台路径合法；单「_」易与仓库名混淆）。与前端 resolveRepoName 一致。
+    const dirSuffix = branch ? `@@${branch.replace(/[^a-zA-Z0-9_\-]/g, '_')}` : '';
     const targetPath = path.resolve(codeDir, repoName + dirSuffix);
 
     const entries = await readRegistry();

@@ -41,7 +41,7 @@ Web UI 支持四种接入代码的方式，对应不同的数据存放位置。
 - **填写服务地址**：必填，例如 `http://10.128.128.88:6660`（即运行 `gitnexus serve` 的机器地址与端口）。前端会调用该地址的 **clone-analyze** 接口，由服务端执行 clone + 分析。
 - **填写研发云仓库 Git 地址**：你的内网/研发云 Git 仓库 URL（HTTPS）。
 - **填写令牌**：在研发云仓库 → 应用菜单中申请令牌（私有仓库必填）。
-- **代码保存位置**：**服务端** `{HOME 或 cwd}/gitnexus_code/{仓库名}`，不再在浏览器内拉取。
+- **代码保存位置**：**服务端** `{HOME 或 cwd}/gitnexus_code/{仓库名}`，不再在浏览器内拉取。若填写了**分支**，目录名为 `{仓库 basename}@@{分支 slug}`（`@@` 为分隔符；分支中非字母数字及 `_`、`-` 的字符会替换为 `_`），与 Web 端 `resolveRepoName` 一致；详见 **`docs/CLONE_ANALYZE_REPO_BRANCH_NAMING.md`**。
 - **GBK→UTF-8**：clone 完成后、建索引前，服务端会自动调用 `scripts/convert_to_utf8.py` 将仓库内文本转为 UTF-8。需在 **运行 serve 的机器** 上安装 **Python**，并确保 gitnexus 包内存在 `scripts/convert_to_utf8.py`。若未转成 UTF-8，请查看 serve 控制台 “UTF-8 conversion skipped” / “UTF-8 conversion failed” 日志。
 - **C++ Method 合并与解析顺序**：`.h`/`.cpp` 同 id 合并、实现文件覆盖节点展示位置，以及分析时可选的 `parse-order.log`（Local Git 下默认随 `GITNEXUS_PROGRESS` 写入克隆目录 `.gitnexus/`），见 **`docs/CXX_METHOD_MERGE_AND_PARSE_ORDER.md`**。
 
