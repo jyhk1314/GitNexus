@@ -16,6 +16,7 @@ import { typeConfig as swiftConfig } from './swift.js';
 import { typeConfig as cCppConfig } from './c-cpp.js';
 import { typeConfig as phpConfig } from './php.js';
 import { typeConfig as rubyConfig } from './ruby.js';
+import { typeConfig as dartConfig } from './dart.js';
 
 export const typeConfigs = {
   [SupportedLanguages.JavaScript]: typescriptConfig,
@@ -31,14 +32,18 @@ export const typeConfigs = {
   [SupportedLanguages.CPlusPlus]: cCppConfig,
   [SupportedLanguages.PHP]: phpConfig,
   [SupportedLanguages.Ruby]: rubyConfig,
+  [SupportedLanguages.Dart]: dartConfig,
+  /** Vue SFC script blocks reuse TS/JS-style extraction. */
+  [SupportedLanguages.Vue]: typescriptConfig,
+  /** COBOL uses the regex pipeline; type env uses a minimal placeholder config. */
+  [SupportedLanguages.Cobol]: rubyConfig,
 } satisfies Record<SupportedLanguages, LanguageTypeConfig>;
 
 export type { LanguageTypeConfig, TypeBindingExtractor, ParameterExtractor, ConstructorBindingScanner } from './types.js';
-export { 
+export {
   TYPED_PARAMETER_TYPES,
   extractSimpleTypeName,
   extractGenericTypeArgs,
   extractVarName,
-  findChildByType,
-  extractRubyConstructorAssignment
+  extractRubyConstructorAssignment,
 } from './shared.js';

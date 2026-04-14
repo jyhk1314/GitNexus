@@ -1,661 +1,316 @@
-import { useState, useCallback, useRef, DragEvent } from 'react';
-import { Upload, FileArchive, Loader2, ArrowRight, Key, Eye, EyeOff, Globe, X, GitBranch } from 'lucide-react';
-import { parseGenericGitUrl } from '../services/git-clone';
-import { connectToServer, type ConnectToServerResult } from '../services/server-connection';
+import { useState, useRef, useEffect } from 'react';
+import { Loader2, Check, Sparkles } from '@/lib/lucide-icons';
+import {
+  connectToServer,
+  fetchRepos,
+  type ConnectResult,
+  type BackendRepo,
+} from '../services/backend-client';
+import { useBackend } from '../hooks/useBackend';
+import { OnboardingGuide } from './OnboardingGuide';
+import { AnalyzeOnboarding } from './AnalyzeOnboarding';
+import { RepoLanding } from './RepoLanding';
 
 interface DropZoneProps {
-  onFileSelect: (file: File) => void;
-  /** Local Git：校验通过后交给 App，使用与本地 ZIP/GitHub 相同的 LoadingOverlay */
-  onLocalGitSubmit?: (args: { proxyUrl: string; repoUrl: string; token?: string; branch?: string }) => Promise<void>;
-  onServerConnect?: (result: ConnectToServerResult, serverUrl?: string) => void;
-  /** ZIP 上传到后端：当填写了代理地址时，上传 zip 到后端解压分析，完成后转为 server 模式 */
-  onZipUploadToServer?: (file: File, proxyUrl: string) => Promise<void>;
+  onServerConnect?: (result: ConnectResult, serverUrl?: string) => void | Promise<void>;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+// ── Crossfade wrapper ───────────────────────────────────────────────────────
+// Captures the outgoing children during fade-out, then swaps to the new children on fade-in.
 
-export const DropZone = ({ onFileSelect, onLocalGitSubmit, onServerConnect, onZipUploadToServer }: DropZoneProps) => {
-  const [isDragging, setIsDragging] = useState(false);
-  const [activeTab, setActiveTab] = useState<'zip' | 'localgit' | 'server'>(() => {
-    if (typeof window === 'undefined') return 'zip';
-    const p = new URLSearchParams(window.location.search);
-    return p.has('server') ? 'server' : 'zip';
-  });
-  const [localGitUrl, setLocalGitUrl] = useState(() => localStorage.getItem('gitnexus-localgit-url') || '');
-  const [localGitToken, setLocalGitToken] = useState('');
-  const [localGitBranch, setLocalGitBranch] = useState(() => localStorage.getItem('gitnexus-localgit-branch') || '');
-  const [localGitProxyUrl, setLocalGitProxyUrl] = useState(() => localStorage.getItem('gitnexus-localgit-proxy-url') || '');
-  const [zipProxyUrl, setZipProxyUrl] = useState(() => localStorage.getItem('gitnexus-zip-proxy-url') || '');
-  const [showLocalToken, setShowLocalToken] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function Crossfade({ activeKey, children }: { activeKey: string; children: React.ReactNode }) {
+  const [displayedKey, setDisplayedKey] = useState(activeKey);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const snapshotRef = useRef<React.ReactNode>(children);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Server tab state：优先从 URL 参数 server/repo 取默认值（默认 server 访问模式）
-  const [serverUrl, setServerUrl] = useState(() => {
-    const p = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-    return p.get('server') || localStorage.getItem('gitnexus-server-url') || '';
-  });
-  const [serverRepoName, setServerRepoName] = useState(() => {
-    const p = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-    return p.get('repo') || localStorage.getItem('gitnexus-server-repo') || '';
-  });
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [serverProgress, setServerProgress] = useState<{
-    phase: string;
-    downloaded: number;
-    total: number | null;
-  }>({ phase: '', downloaded: 0, total: null });
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // Keep snapshot up to date when NOT transitioning
+  if (!isTransitioning && activeKey === displayedKey) {
+    snapshotRef.current = children;
+  }
 
-  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  }, []);
-
-  const handleZipFile = useCallback(
-    async (file: File) => {
-      const proxyTrimmed = zipProxyUrl.trim();
-      if (proxyTrimmed && onZipUploadToServer) {
-        setError(null);
-        try {
-          await onZipUploadToServer(file, proxyTrimmed);
-          localStorage.setItem('gitnexus-zip-proxy-url', proxyTrimmed);
-        } catch (err) {
-          if ((err as Error).name === 'AbortError') return;
-          console.error('ZIP upload to server failed:', err);
-          setError((err as Error).message || 'ZIP 上传或分析失败');
-        }
-      } else {
-        onFileSelect(file);
-      }
-    },
-    [zipProxyUrl, onZipUploadToServer, onFileSelect]
-  );
-
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsDragging(false);
-
-      const files = e.dataTransfer.files;
-      if (files.length > 0) {
-        const file = files[0];
-        if (file.name.endsWith('.zip')) {
-          handleZipFile(file);
-        } else {
-          setError('Please drop a .zip file');
-        }
-      }
-    },
-    [handleZipFile]
-  );
-
-  const handleFileInput = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (files && files.length > 0) {
-        const file = files[0];
-        if (file.name.endsWith('.zip')) {
-          handleZipFile(file);
-        } else {
-          setError('Please select a .zip file');
-        }
-      }
-    },
-    [handleZipFile]
-  );
-
-  const handleLocalGitClone = async () => {
-    if (!localGitUrl.trim()) {
-      setError('请输入 Git 仓库 URL');
-      return;
+  useEffect(() => {
+    if (activeKey !== displayedKey) {
+      setIsTransitioning(true);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => {
+        snapshotRef.current = null; // clear snapshot — new children will render
+        setDisplayedKey(activeKey);
+        setIsTransitioning(false);
+      }, 300);
     }
-    const proxyTrimmed = localGitProxyUrl.trim();
-    if (!proxyTrimmed) {
-      setError('请填写代理/服务地址（即运行 gitnexus serve 的地址），以便在后端执行 clone-analyze');
-      return;
-    }
-
-    if (!parseGenericGitUrl(localGitUrl)) {
-      setError('无效的 Git URL，请使用 HTTPS 格式，例如：https://git.example.com/org/repo.git');
-      return;
-    }
-
-    if (!onLocalGitSubmit) {
-      setError('未配置 Local Git 提交处理');
-      return;
-    }
-
-    setError(null);
-    await onLocalGitSubmit({
-      proxyUrl: proxyTrimmed,
-      repoUrl: localGitUrl.trim(),
-      token: localGitToken.trim() || undefined,
-      branch: localGitBranch.trim() || undefined,
-    });
-  };
-
-  const handleServerConnect = async () => {
-    const urlToUse = serverUrl.trim() || window.location.origin;
-    if (!urlToUse) {
-      setError('Please enter a server URL');
-      return;
-    }
-
-    // Persist URL to localStorage
-    localStorage.setItem('gitnexus-server-url', serverUrl);
-
-    setError(null);
-    setIsConnecting(true);
-    setServerProgress({ phase: 'validating', downloaded: 0, total: null });
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
-    const repoToUse = serverRepoName.trim() || undefined;
-    try {
-      const result = await connectToServer(
-        urlToUse,
-        (phase, downloaded, total) => {
-          setServerProgress({ phase, downloaded, total });
-        },
-        abortController.signal,
-        repoToUse
-      );
-
-      if (repoToUse) {
-        localStorage.setItem('gitnexus-server-repo', repoToUse);
-      }
-      if (onServerConnect) {
-        onServerConnect(result, urlToUse);
-      }
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') {
-        // User cancelled
-        return;
-      }
-      console.error('Server connect failed:', err);
-      const message = err instanceof Error ? err.message : 'Failed to connect to server';
-      if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
-        setError('Cannot reach server. Check the URL and ensure the server is running.');
-      } else {
-        setError(message);
-      }
-    } finally {
-      setIsConnecting(false);
-      abortControllerRef.current = null;
-    }
-  };
-
-  const handleCancelConnect = () => {
-    abortControllerRef.current?.abort();
-    setIsConnecting(false);
-  };
-
-  const serverProgressPercent = serverProgress.total
-    ? Math.round((serverProgress.downloaded / serverProgress.total) * 100)
-    : null;
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, [activeKey, displayedKey]);
 
   return (
-    <div className="flex items-center justify-center min-h-screen p-8 bg-void">
+    <div
+      className="transition-[opacity,transform] duration-300 ease-out"
+      style={{
+        opacity: isTransitioning ? 0 : 1,
+        transform: isTransitioning ? 'scale(0.97) translateY(8px)' : 'scale(1) translateY(0)',
+      }}
+    >
+      {isTransitioning ? snapshotRef.current : children}
+    </div>
+  );
+}
+
+// ── Phase cards ─────────────────────────────────────────────────────────────
+
+function SuccessCard() {
+  return (
+    <div
+      className="relative overflow-hidden rounded-3xl border border-emerald-500/20 bg-surface p-7"
+      role="status"
+      aria-live="polite"
+    >
+      {/* Success glow */}
+      <div className="pointer-events-none absolute -top-20 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-emerald-500/8 blur-3xl" />
+
+      <div className="relative">
+        {/* Animated check icon */}
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 shadow-[0_0_30px_rgba(16,185,129,0.15)]">
+          <Check className="h-8 w-8 text-emerald-400" />
+        </div>
+
+        <h2 className="mb-2 text-center text-lg font-semibold text-emerald-400">
+          Server Connected
+        </h2>
+        <p className="text-center text-sm leading-relaxed text-text-secondary">
+          Preparing your code knowledge graph...
+        </p>
+
+        {/* Subtle progress hint */}
+        <div className="mt-6 flex items-center justify-center gap-2">
+          <div className="flex gap-1">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400/60"
+                style={{ animationDelay: `${i * 200}ms` }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoadingCard({ message }: { message: string }) {
+  return (
+    <div
+      className="relative overflow-hidden rounded-3xl border border-accent/20 bg-surface p-7"
+      role="status"
+      aria-live="polite"
+    >
+      {/* Loading glow */}
+      <div className="pointer-events-none absolute -top-20 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-accent/8 blur-3xl" />
+
+      <div className="relative">
+        {/* Spinner */}
+        <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-accent/30 bg-gradient-to-br from-accent/20 to-accent-dim/10 shadow-glow-soft">
+          <Loader2 className="h-8 w-8 animate-spin text-accent" />
+        </div>
+
+        <h2 className="mb-2 text-center text-lg font-semibold text-text-primary">
+          {message || 'Connecting...'}
+        </h2>
+        <p className="text-center text-sm leading-relaxed text-text-secondary">
+          This may take a moment for large repositories
+        </p>
+
+        {/* Decorative sparkle */}
+        <div className="mt-5 flex items-center justify-center">
+          <Sparkles className="h-4 w-4 text-accent/30" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DropZone ─────────────────────────────────────────────────────────────────
+
+export const DropZone = ({ onServerConnect }: DropZoneProps) => {
+  const [error, setError] = useState<string | null>(null);
+
+  // Backend polling for server detection
+  const {
+    isConnected,
+    isProbing,
+    startPolling,
+    stopPolling,
+    isPolling,
+    backendUrl: detectedBackendUrl,
+  } = useBackend();
+  const [initialProbeComplete, setInitialProbeComplete] = useState(false);
+  const autoConnectRan = useRef(false);
+  const autoConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Connection state
+  // 'analyze'  = server up but zero repos indexed — show URL input
+  // 'landing'  = server up with indexed repos — show repo picker + analyze
+  const [phase, setPhase] = useState<'onboarding' | 'analyze' | 'landing' | 'success' | 'loading'>(
+    'onboarding',
+  );
+  const [loadingMessage, setLoadingMessage] = useState('');
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [detectedRepos, setDetectedRepos] = useState<BackendRepo[]>([]);
+
+  // Auto-connect to the detected server — fetch repo list and show the
+  // appropriate screen (landing with repo cards, or analyze for zero repos).
+  const handleAutoConnect = async () => {
+    setPhase('loading');
+    setLoadingMessage('Connecting...');
+    setError(null);
+
+    try {
+      const repos = await fetchRepos();
+      if (repos.length === 0) {
+        setPhase('analyze');
+        autoConnectRan.current = false;
+        return;
+      }
+
+      // Show landing screen so the user can choose which repo to explore
+      setDetectedRepos(repos);
+      setPhase('landing');
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      const message = err instanceof Error ? err.message : 'Failed to connect';
+      setError(message);
+      setPhase('onboarding');
+    }
+  };
+
+  const handleAutoConnectRef = useRef(handleAutoConnect);
+  handleAutoConnectRef.current = handleAutoConnect;
+
+  // Shared handler: connect to a specific repo by name (used by both repo
+  // card selection on the landing screen and post-analysis completion).
+  const connectToRepo = (repoName: string) => {
+    autoConnectRan.current = true;
+    setPhase('loading');
+    setLoadingMessage('Loading graph...');
+    setError(null);
+
+    (async () => {
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+      try {
+        const result = await connectToServer(
+          detectedBackendUrl,
+          (p, downloaded, total) => {
+            if (p === 'validating') {
+              setLoadingMessage('Validating server...');
+            } else if (p === 'downloading') {
+              const pct = total ? Math.round((downloaded / total) * 100) : null;
+              const mb = (downloaded / (1024 * 1024)).toFixed(1);
+              setLoadingMessage(pct ? `Downloading graph... ${pct}%` : `Downloading... ${mb} MB`);
+            } else if (p === 'extracting') {
+              setLoadingMessage('Processing graph...');
+            }
+          },
+          abortController.signal,
+          repoName,
+        );
+        if (onServerConnect) {
+          await onServerConnect(result, detectedBackendUrl);
+        }
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Failed to load graph');
+        setPhase(detectedRepos.length > 0 ? 'landing' : 'analyze');
+      } finally {
+        abortControllerRef.current = null;
+      }
+    })();
+  };
+
+  // Track when the initial probe finishes
+  useEffect(() => {
+    if (!isProbing && !initialProbeComplete) {
+      setInitialProbeComplete(true);
+    }
+  }, [isProbing, initialProbeComplete]);
+
+  // Start polling once after initial probe fails
+  useEffect(() => {
+    if (initialProbeComplete && !isConnected && !isPolling && !autoConnectRan.current) {
+      startPolling();
+    }
+  }, [initialProbeComplete, isConnected, isPolling, startPolling]);
+
+  // Auto-connect when server is detected
+  useEffect(() => {
+    if (isConnected && !autoConnectRan.current) {
+      autoConnectRan.current = true;
+      stopPolling();
+      setPhase('success');
+      autoConnectTimerRef.current = setTimeout(() => {
+        autoConnectTimerRef.current = null;
+        handleAutoConnectRef.current();
+      }, 1200); // hold success state long enough to register
+    }
+    // Server went away — reset to onboarding (or analyze if we were on analyze)
+    if (!isConnected && autoConnectRan.current && !isProbing) {
+      autoConnectRan.current = false;
+      if (autoConnectTimerRef.current !== null) {
+        clearTimeout(autoConnectTimerRef.current);
+        autoConnectTimerRef.current = null;
+      }
+      setPhase('onboarding');
+      setError(null);
+    }
+    // NOTE: No cleanup return here. The autoConnectTimerRef must survive effect
+    // re-runs (e.g. isProbing flipping false while the 1200ms window is active).
+    // The unmount cleanup effect below is the sole owner of timer cancellation.
+  }, [isConnected, isProbing, stopPolling]);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (autoConnectTimerRef.current !== null) clearTimeout(autoConnectTimerRef.current);
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  // Don't render until initial probe completes
+  const displayPhase = !initialProbeComplete ? null : phase;
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-void p-8">
       {/* Background gradient effects */}
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-accent/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-node-interface/10 rounded-full blur-3xl" />
+      <div className="pointer-events-none fixed inset-0">
+        <div className="absolute top-1/4 left-1/4 h-96 w-96 rounded-full bg-accent/10 blur-3xl" />
+        <div className="absolute right-1/4 bottom-1/4 h-96 w-96 rounded-full bg-node-interface/10 blur-3xl" />
       </div>
 
       <div className="relative w-full max-w-lg">
-        {/* Tab Switcher */}
-        <div className="flex mb-4 bg-surface border border-border-default rounded-xl p-1">
-          <button
-            onClick={() => { setActiveTab('zip'); setError(null); }}
-            className={`
-              flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg
-              text-sm font-medium transition-all duration-200
-              ${activeTab === 'zip'
-                ? 'bg-accent text-white shadow-md'
-                : 'text-text-secondary hover:text-text-primary hover:bg-elevated'
-              }
-            `}
-          >
-            <FileArchive className="w-4 h-4" />
-            ZIP Upload
-          </button>
-          <button
-            onClick={() => { setActiveTab('localgit'); setError(null); }}
-            className={`
-              flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg
-              text-sm font-medium transition-all duration-200
-              ${activeTab === 'localgit'
-                ? 'bg-accent text-white shadow-md'
-                : 'text-text-secondary hover:text-text-primary hover:bg-elevated'
-              }
-            `}
-          >
-            <GitBranch className="w-4 h-4" />
-            Git
-          </button>
-          <button
-            onClick={() => { setActiveTab('server'); setError(null); }}
-            className={`
-              flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg
-              text-sm font-medium transition-all duration-200
-              ${activeTab === 'server'
-                ? 'bg-accent text-white shadow-md'
-                : 'text-text-secondary hover:text-text-primary hover:bg-elevated'
-              }
-            `}
-          >
-            <Globe className="w-4 h-4" />
-            Server
-          </button>
-        </div>
-
-        {/* Error Message */}
+        {/* Error — floats above the card */}
         {error && (
-          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm text-center">
+          <div className="mb-4 animate-fade-in rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-center text-sm text-red-400">
             {error}
           </div>
         )}
 
-        {/* ZIP Upload Tab — 填写代理后上传由 App 切到 LoadingOverlay */}
-        {activeTab === 'zip' && (
-          <>
-            {onZipUploadToServer && (
-              <div className="mb-4">
-                <input
-                  type="url"
-                  name="zip-proxy-input"
-                  value={zipProxyUrl}
-                  onChange={(e) => setZipProxyUrl(e.target.value)}
-                  placeholder="后端代理地址（可选）如 http://10.128.128.88:6660，填写后上传到后端解压分析"
-                  className="
-                    w-full px-4 py-2.5
-                    bg-elevated border border-border-default rounded-xl
-                    text-text-primary placeholder-text-muted text-sm
-                    focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-                    transition-all duration-200
-                  "
-                />
-              </div>
+        {/* Crossfade between phases */}
+        {displayPhase && (
+          <Crossfade activeKey={displayPhase}>
+            {displayPhase === 'onboarding' && <OnboardingGuide isPolling={isPolling} />}
+            {displayPhase === 'analyze' && <AnalyzeOnboarding onComplete={connectToRepo} />}
+            {displayPhase === 'landing' && (
+              <RepoLanding
+                repos={detectedRepos}
+                onSelectRepo={connectToRepo}
+                onAnalyzeComplete={connectToRepo}
+              />
             )}
-            <div
-              className={`
-                relative p-16
-                bg-surface border-2 border-dashed rounded-3xl
-                transition-all duration-300 cursor-pointer
-                ${isDragging
-                  ? 'border-accent bg-elevated scale-105 shadow-glow'
-                  : 'border-border-default hover:border-accent/50 hover:bg-elevated/50 animate-breathe'
-                }
-              `}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onClick={() => document.getElementById('file-input')?.click()}
-            >
-              <input
-                id="file-input"
-                type="file"
-                accept=".zip"
-                className="hidden"
-                onChange={handleFileInput}
-              />
-
-              <div className={`
-                mx-auto w-20 h-20 mb-6
-                flex items-center justify-center
-                bg-gradient-to-br from-accent to-node-interface
-                rounded-2xl shadow-glow
-                transition-transform duration-300
-                ${isDragging ? 'scale-110' : ''}
-              `}>
-                {isDragging ? (
-                  <Upload className="w-10 h-10 text-white" />
-                ) : (
-                  <FileArchive className="w-10 h-10 text-white" />
-                )}
-              </div>
-
-              <h2 className="text-xl font-semibold text-text-primary text-center mb-2">
-                {isDragging ? 'Drop it here!' : 'Drop your codebase'}
-              </h2>
-              <p className="text-sm text-text-secondary text-center mb-6">
-                {zipProxyUrl.trim()
-                  ? '填写了代理地址：将上传到后端解压分析，代码落在服务端'
-                  : 'Drag & drop a .zip file to generate a knowledge graph'}
-              </p>
-
-              <div className="flex items-center justify-center gap-3 text-xs text-text-muted">
-                <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
-                  .zip
-                </span>
-                {zipProxyUrl.trim() && (
-                  <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
-                    后端处理
-                  </span>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Local Git — 提交后由 App 切到 LoadingOverlay（与本地 ZIP 解析同一套） */}
-        {activeTab === 'localgit' && (
-          <div className="p-8 bg-surface border border-border-default rounded-3xl">
-            <div className="mx-auto w-20 h-20 mb-6 flex items-center justify-center bg-gradient-to-br from-emerald-600 to-accent rounded-2xl shadow-lg">
-              <GitBranch className="w-10 h-10 text-white" />
-            </div>
-            <h2 className="text-xl font-semibold text-text-primary text-center mb-2">
-              私有 / 开源 Git 仓库
-            </h2>
-            <p className="text-sm text-text-secondary text-center mb-6">
-              填写服务地址（gitnexus serve）与 Git 仓库 URL、令牌；由服务端执行 clone-analyze，代码落在服务端 gitnexus_code 目录。
-            </p>
-
-            <div className="space-y-3" data-form-type="other">
-              <input
-                type="url"
-                name="local-git-proxy-input"
-                value={localGitProxyUrl}
-                onChange={(e) => setLocalGitProxyUrl(e.target.value)}
-                placeholder="代理地址（可选，私有/内网必填）如 http://10.128.128.88:6660 或 gitnexus serve 地址"
-                autoComplete="off"
-                data-form-type="other"
-                className="
-                  w-full px-4 py-3
-                  bg-elevated border border-border-default rounded-xl
-                  text-text-primary placeholder-text-muted
-                  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-                  transition-all duration-200
-                "
-              />
-              <input
-                type="url"
-                name="local-git-url-input"
-                value={localGitUrl}
-                onChange={(e) => setLocalGitUrl(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleLocalGitClone()}
-                placeholder="Git 仓库 URL，如 https://git.example.com/org/repo.git"
-                autoComplete="off"
-                data-lpignore="true"
-                data-form-type="other"
-                className="
-                  w-full px-4 py-3
-                  bg-elevated border border-border-default rounded-xl
-                  text-text-primary placeholder-text-muted
-                  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-                  transition-all duration-200
-                "
-              />
-
-              <div className="relative">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted">
-                  <GitBranch className="w-4 h-4" />
-                </div>
-                <input
-                  type="text"
-                  name="local-git-branch-input"
-                  value={localGitBranch}
-                  onChange={(e) => setLocalGitBranch(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleLocalGitClone()}
-                  placeholder="分支名（可选，不填则使用默认分支）"
-                  autoComplete="off"
-                  data-lpignore="true"
-                  data-form-type="other"
-                  className="
-                    w-full pl-10 pr-4 py-3
-                    bg-elevated border border-border-default rounded-xl
-                    text-text-primary placeholder-text-muted
-                    focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-                    transition-all duration-200
-                  "
-                />
-              </div>
-
-              <div className="relative">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted">
-                  <Key className="w-4 h-4" />
-                </div>
-                <input
-                  type={showLocalToken ? 'text' : 'password'}
-                  name="local-git-token-input"
-                  value={localGitToken}
-                  onChange={(e) => setLocalGitToken(e.target.value)}
-                  placeholder="访问令牌（可选，设置研发云仓库时必填，研发云仓库->应用菜单申请）"
-                  autoComplete="new-password"
-                  data-lpignore="true"
-                  data-form-type="other"
-                  className="
-                    w-full pl-10 pr-10 py-3
-                    bg-elevated border border-border-default rounded-xl
-                    text-text-primary placeholder-text-muted
-                    focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-                    transition-all duration-200
-                  "
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowLocalToken(!showLocalToken)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary transition-colors"
-                >
-                  {showLocalToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-
-              <button
-                onClick={handleLocalGitClone}
-                disabled={!localGitUrl.trim() || !localGitProxyUrl.trim() || !onLocalGitSubmit}
-                className="
-                  w-full flex items-center justify-center gap-2
-                  px-4 py-3
-                  bg-accent hover:bg-accent/90
-                  text-white font-medium rounded-xl
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                  transition-all duration-200
-                "
-              >
-                克隆并分析（代码落在服务端）
-                <ArrowRight className="w-5 h-5" />
-              </button>
-            </div>
-
-            {localGitToken && (
-              <p className="mt-3 text-xs text-text-muted text-center">
-                令牌仅保存在当前页面，不会上传到任何服务器
-              </p>
-            )}
-
-            <div className="mt-4 flex items-center justify-center gap-3 text-xs text-text-muted">
-              <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
-                HTTPS
-              </span>
-              <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
-                支持鉴权
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Server Tab */}
-        {activeTab === 'server' && (
-          <div className="p-8 bg-surface border border-border-default rounded-3xl">
-            {/* Icon */}
-            <div className="mx-auto w-20 h-20 mb-6 flex items-center justify-center bg-gradient-to-br from-accent to-emerald-600 rounded-2xl shadow-lg">
-              <Globe className="w-10 h-10 text-white" />
-            </div>
-
-            {/* Text */}
-            <h2 className="text-xl font-semibold text-text-primary text-center mb-2">
-              Connect to Server
-            </h2>
-            <p className="text-sm text-text-secondary text-center mb-6">
-              Load a pre-built knowledge graph from a running GitNexus server
-            </p>
-
-            {/* Inputs */}
-            <div className="space-y-3" data-form-type="other">
-              <input
-                type="url"
-                name="server-url-input"
-                value={serverUrl}
-                onChange={(e) => setServerUrl(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && !isConnecting && handleServerConnect()}
-                placeholder={typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:6660` : 'http://localhost:6660'}
-                disabled={isConnecting}
-                autoComplete="off"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-form-type="other"
-                className="
-                  w-full px-4 py-3
-                  bg-elevated border border-border-default rounded-xl
-                  text-text-primary placeholder-text-muted
-                  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                  transition-all duration-200
-                "
-              />
-
-              <input
-                type="text"
-                name="server-repo-input"
-                value={serverRepoName}
-                onChange={(e) => setServerRepoName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && !isConnecting && handleServerConnect()}
-                placeholder="仓库名称（可选，多仓库时指定）"
-                disabled={isConnecting}
-                autoComplete="off"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-form-type="other"
-                className="
-                  w-full px-4 py-3
-                  bg-elevated border border-border-default rounded-xl
-                  text-text-primary placeholder-text-muted
-                  focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
-                  disabled:opacity-50 disabled:cursor-not-allowed
-                  transition-all duration-200
-                "
-              />
-
-              <div className="flex gap-2">
-                <button
-                  onClick={handleServerConnect}
-                  disabled={isConnecting}
-                  className="
-                    flex-1 flex items-center justify-center gap-2
-                    px-4 py-3
-                    bg-accent hover:bg-accent/90
-                    text-white font-medium rounded-xl
-                    disabled:opacity-50 disabled:cursor-not-allowed
-                    transition-all duration-200
-                  "
-                >
-                  {isConnecting ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      {serverProgress.phase === 'validating'
-                        ? 'Validating...'
-                        : serverProgress.phase === 'downloading'
-                          ? serverProgressPercent !== null
-                            ? `Downloading... ${serverProgressPercent}%`
-                            : `Downloading... ${formatBytes(serverProgress.downloaded)}`
-                          : serverProgress.phase === 'extracting'
-                            ? 'Processing...'
-                            : 'Connecting...'
-                      }
-                    </>
-                  ) : (
-                    <>
-                      Connect
-                      <ArrowRight className="w-5 h-5" />
-                    </>
-                  )}
-                </button>
-
-                {isConnecting && (
-                  <button
-                    onClick={handleCancelConnect}
-                    className="
-                      flex items-center justify-center
-                      px-4 py-3
-                      bg-red-500/20 hover:bg-red-500/30
-                      text-red-400 font-medium rounded-xl
-                      transition-all duration-200
-                    "
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Progress bar */}
-            {isConnecting && serverProgress.phase === 'downloading' && (
-              <div className="mt-4">
-                <div className="h-2 bg-elevated rounded-full overflow-hidden">
-                  <div
-                    className={`h-full bg-accent transition-all duration-300 ease-out ${
-                      serverProgressPercent === null ? 'animate-pulse' : ''
-                    }`}
-                    style={{
-                      width: serverProgressPercent !== null
-                        ? `${serverProgressPercent}%`
-                        : '100%',
-                    }}
-                  />
-                </div>
-                {serverProgress.total && (
-                  <p className="mt-1 text-xs text-text-muted text-center">
-                    {formatBytes(serverProgress.downloaded)} / {formatBytes(serverProgress.total)}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* Hints */}
-            <div className="mt-4 flex items-center justify-center gap-3 text-xs text-text-muted">
-              <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
-                Pre-indexed
-              </span>
-              <span className="px-3 py-1.5 bg-elevated border border-border-subtle rounded-md">
-                No WASM needed
-              </span>
-            </div>
-
-            {/* 添加本地或私有仓库说明 */}
-            <div className="mt-6 p-4 bg-elevated/60 border border-border-subtle rounded-xl text-sm text-text-secondary">
-              <p className="font-medium text-text-primary mb-2">添加本地或私有仓库</p>
-              <p className="mb-3 text-xs text-text-muted">
-                如需分析本地或私有 Git 仓库，请使用 <span className="font-medium text-text-secondary">Local Git</span> 或 <span className="font-medium text-text-secondary">ZIP Upload</span> 标签页的代理模式先分析<span className="font-medium text-text-secondary">[至少一次]</span> ：
-              </p>
-              <ul className="space-y-2 text-xs text-text-muted mb-3">
-                <li className="flex items-start gap-2">
-                  <span className="text-accent mt-0.5">•</span>
-                  <span><span className="font-medium text-text-secondary">Local Git 模式：</span>填写代理地址后，服务端会自动克隆并分析代码，完成后即可在此 Server 模式中直接查看，无需重复分析。</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <span className="text-accent mt-0.5">•</span>
-                  <span><span className="font-medium text-text-secondary">ZIP Upload 模式：</span>填写代理地址后上传 ZIP 文件，服务端会自动解压并分析代码，完成后即可在此 Server 模式中直接查看，无需重复分析。</span>
-                </li>
-              </ul>
-              <p className="text-xs text-text-muted border-t border-border-subtle pt-3">
-                <span className="font-medium text-text-secondary">注意：</span>分析完成后，后续访问直接使用 Server 模式即可，无需重复分析。
-              </p>
-            </div>
-          </div>
+            {displayPhase === 'success' && <SuccessCard />}
+            {displayPhase === 'loading' && <LoadingCard message={loadingMessage} />}
+          </Crossfade>
         )}
       </div>
     </div>

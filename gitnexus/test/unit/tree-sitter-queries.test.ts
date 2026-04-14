@@ -11,35 +11,10 @@ import {
   RUST_QUERIES,
   PHP_QUERIES,
   SWIFT_QUERIES,
-  LANGUAGE_QUERIES,
+  DART_QUERIES,
 } from '../../src/core/ingestion/tree-sitter-queries.js';
-import { SupportedLanguages } from '../../src/config/supported-languages.js';
 
 describe('tree-sitter queries', () => {
-  describe('LANGUAGE_QUERIES map', () => {
-    it('has entries for all supported languages', () => {
-      const allLanguages = Object.values(SupportedLanguages);
-      for (const lang of allLanguages) {
-        expect(LANGUAGE_QUERIES[lang]).toBeDefined();
-        expect(LANGUAGE_QUERIES[lang].length).toBeGreaterThan(0);
-      }
-    });
-
-    it('maps to the correct query constants', () => {
-      expect(LANGUAGE_QUERIES[SupportedLanguages.TypeScript]).toBe(TYPESCRIPT_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.JavaScript]).toBe(JAVASCRIPT_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.Python]).toBe(PYTHON_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.Java]).toBe(JAVA_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.C]).toBe(C_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.Go]).toBe(GO_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.CPlusPlus]).toBe(CPP_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.CSharp]).toBe(CSHARP_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.Rust]).toBe(RUST_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.PHP]).toBe(PHP_QUERIES);
-      expect(LANGUAGE_QUERIES[SupportedLanguages.Swift]).toBe(SWIFT_QUERIES);
-    });
-  });
-
   describe('TypeScript queries', () => {
     it('captures class declarations', () => {
       expect(TYPESCRIPT_QUERIES).toContain('class_declaration');
@@ -126,6 +101,10 @@ describe('tree-sitter queries', () => {
     it('captures extends and implements heritage', () => {
       expect(JAVA_QUERIES).toContain('@heritage.extends');
       expect(JAVA_QUERIES).toContain('@heritage.implements');
+    });
+
+    it('captures method references as calls', () => {
+      expect(JAVA_QUERIES).toContain('(method_reference) @call');
     });
   });
 
@@ -312,6 +291,69 @@ describe('tree-sitter queries', () => {
 
     it('captures actors as classes', () => {
       expect(SWIFT_QUERIES).toContain('"actor"');
+    });
+  });
+
+  describe('Dart queries', () => {
+    it('captures class, mixin, extension, enum declarations', () => {
+      expect(DART_QUERIES).toContain('@definition.class');
+      expect(DART_QUERIES).toContain('@definition.trait');
+      expect(DART_QUERIES).toContain('@definition.enum');
+    });
+
+    it('captures top-level functions and methods', () => {
+      expect(DART_QUERIES).toContain('@definition.function');
+      expect(DART_QUERIES).toContain('@definition.method');
+    });
+
+    it('captures constructors including factory constructors', () => {
+      expect(DART_QUERIES).toContain('@definition.constructor');
+      expect(DART_QUERIES).toContain('factory_constructor_signature');
+    });
+
+    it('captures field declarations and getters/setters', () => {
+      expect(DART_QUERIES).toContain('@definition.property');
+      expect(DART_QUERIES).toContain('getter_signature');
+      expect(DART_QUERIES).toContain('setter_signature');
+    });
+
+    it('captures import statements', () => {
+      expect(DART_QUERIES).toContain('@import');
+      expect(DART_QUERIES).toContain('library_import');
+    });
+
+    it('captures heritage (extends, implements, with)', () => {
+      expect(DART_QUERIES).toContain('@heritage.extends');
+    });
+
+    it('captures direct calls and method chains', () => {
+      expect(DART_QUERIES).toContain('expression_statement');
+      expect(DART_QUERIES).toContain('unconditional_assignable_selector');
+      expect(DART_QUERIES).toContain('@call');
+    });
+
+    it('captures await expressions as calls', () => {
+      expect(DART_QUERIES).toContain('await_expression');
+    });
+
+    it('captures named argument calls (widget children)', () => {
+      expect(DART_QUERIES).toContain('named_argument');
+    });
+
+    it('captures list literal calls (widget children lists)', () => {
+      expect(DART_QUERIES).toContain('list_literal');
+    });
+
+    it('captures cascade calls (obj..method())', () => {
+      expect(DART_QUERIES).toContain('cascade_section');
+    });
+
+    it('captures arrow function body calls (=> expr)', () => {
+      expect(DART_QUERIES).toContain('function_body "=>"');
+    });
+
+    it('captures lambda body calls (() => expr)', () => {
+      expect(DART_QUERIES).toContain('function_expression_body');
     });
   });
 });

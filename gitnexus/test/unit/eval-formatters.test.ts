@@ -37,12 +37,22 @@ describe('formatQueryResult', () => {
 
   it('formats processes with symbols', () => {
     const result = formatQueryResult({
-      processes: [
-        { id: 'p1', summary: 'User Login Flow', step_count: 3, symbol_count: 2 },
-      ],
+      processes: [{ id: 'p1', summary: 'User Login Flow', step_count: 3, symbol_count: 2 }],
       process_symbols: [
-        { process_id: 'p1', type: 'Function', name: 'login', filePath: 'src/auth.ts', startLine: 10 },
-        { process_id: 'p1', type: 'Function', name: 'validate', filePath: 'src/auth.ts', startLine: 20 },
+        {
+          process_id: 'p1',
+          type: 'Function',
+          name: 'login',
+          filePath: 'src/auth.ts',
+          startLine: 10,
+        },
+        {
+          process_id: 'p1',
+          type: 'Function',
+          name: 'validate',
+          filePath: 'src/auth.ts',
+          startLine: 20,
+        },
       ],
       definitions: [],
     });
@@ -70,9 +80,7 @@ describe('formatQueryResult', () => {
   it('formats standalone definitions', () => {
     const result = formatQueryResult({
       processes: [],
-      definitions: [
-        { type: 'Interface', name: 'Config', filePath: 'src/types.ts' },
-      ],
+      definitions: [{ type: 'Interface', name: 'Config', filePath: 'src/types.ts' }],
     });
     expect(result).toContain('Standalone definitions');
     expect(result).toContain('Config');
@@ -134,9 +142,7 @@ describe('formatContextResult', () => {
       symbol: { kind: 'Function', name: 'foo', filePath: 'src/a.ts' },
       incoming: {},
       outgoing: {},
-      processes: [
-        { name: 'Auth Flow', step_index: 2, step_count: 5 },
-      ],
+      processes: [{ name: 'Auth Flow', step_index: 2, step_count: 5 }],
     });
     expect(result).toContain('1 execution flow');
     expect(result).toContain('Auth Flow');
@@ -147,7 +153,46 @@ describe('formatContextResult', () => {
 
 describe('formatImpactResult', () => {
   it('returns error message for error input', () => {
-    expect(formatImpactResult({ error: 'bad request' })).toBe('Error: bad request');
+    expect(formatImpactResult({ error: 'bad request' })).toContain('Error: bad request');
+  });
+
+  it('returns error with suggestion when provided', () => {
+    const result = formatImpactResult({
+      error: 'Impact analysis failed',
+      suggestion: 'Try gitnexus context <symbol> as a fallback',
+    });
+    expect(result).toContain('Error: Impact analysis failed');
+    expect(result).toContain('Suggestion: Try gitnexus context');
+  });
+
+  it('shows partial warning when traversal was interrupted', () => {
+    const result = formatImpactResult({
+      target: { kind: 'Function', name: 'foo' },
+      direction: 'upstream',
+      impactedCount: 2,
+      partial: true,
+      byDepth: {
+        1: [
+          {
+            type: 'Function',
+            name: 'caller1',
+            filePath: 'src/a.ts',
+            relationType: 'CALLS',
+            confidence: 1,
+          },
+          {
+            type: 'Function',
+            name: 'caller2',
+            filePath: 'src/b.ts',
+            relationType: 'CALLS',
+            confidence: 1,
+          },
+        ],
+      },
+    });
+    expect(result).toContain('Partial results');
+    expect(result).toContain('caller1');
+    expect(result).toContain('caller2');
   });
 
   it('handles zero impact', () => {
@@ -167,11 +212,29 @@ describe('formatImpactResult', () => {
       impactedCount: 3,
       byDepth: {
         1: [
-          { type: 'Function', name: 'caller1', filePath: 'src/a.ts', relationType: 'CALLS', confidence: 1 },
-          { type: 'Function', name: 'caller2', filePath: 'src/b.ts', relationType: 'CALLS', confidence: 0.8 },
+          {
+            type: 'Function',
+            name: 'caller1',
+            filePath: 'src/a.ts',
+            relationType: 'CALLS',
+            confidence: 1,
+          },
+          {
+            type: 'Function',
+            name: 'caller2',
+            filePath: 'src/b.ts',
+            relationType: 'CALLS',
+            confidence: 0.8,
+          },
         ],
         2: [
-          { type: 'Class', name: 'App', filePath: 'src/app.ts', relationType: 'IMPORTS', confidence: 1 },
+          {
+            type: 'Class',
+            name: 'App',
+            filePath: 'src/app.ts',
+            relationType: 'IMPORTS',
+            confidence: 1,
+          },
         ],
       },
     });
@@ -247,9 +310,7 @@ describe('formatDetectChangesResult', () => {
   it('formats changes with affected processes', () => {
     const result = formatDetectChangesResult({
       summary: { changed_files: 2, changed_count: 3, affected_count: 1, risk_level: 'MEDIUM' },
-      changed_symbols: [
-        { type: 'Function', name: 'foo', filePath: 'src/a.ts' },
-      ],
+      changed_symbols: [{ type: 'Function', name: 'foo', filePath: 'src/a.ts' }],
       affected_processes: [
         { name: 'Auth Flow', step_count: 5, changed_steps: [{ symbol: 'foo' }] },
       ],

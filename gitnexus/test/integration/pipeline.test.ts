@@ -11,9 +11,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
-import fsSync from 'node:fs';
 import { runPipelineFromRepo } from '../../src/core/ingestion/pipeline.js';
-import type { PipelineProgress } from '../../src/types/pipeline.js';
+import type { PipelineProgress } from 'gitnexus-shared';
 import type { PipelineResult } from '../../src/types/pipeline.js';
 
 const MINI_REPO = path.resolve(__dirname, '..', 'fixtures', 'mini-repo');
@@ -37,7 +36,7 @@ describe('pipeline end-to-end', () => {
 
     // --- Verify File nodes exist for each source file ---
     const fileNodes: string[] = [];
-    result.graph.forEachNode(n => {
+    result.graph.forEachNode((n) => {
       if (n.label === 'File') fileNodes.push(n.properties.filePath || n.properties.name);
     });
     expect(fileNodes).toContain('src/handler.ts');
@@ -46,12 +45,11 @@ describe('pipeline end-to-end', () => {
     expect(fileNodes).toContain('src/formatter.ts');
     expect(fileNodes).toContain('src/index.ts');
     expect(fileNodes).toContain('src/logger.ts');
-    expect(fileNodes).toContain('src/long-chain.ts');
     expect(fileNodes).toContain('src/middleware.ts');
 
     // --- Verify symbol nodes were created (functions, classes) ---
     const symbolNames: string[] = [];
-    result.graph.forEachNode(n => {
+    result.graph.forEachNode((n) => {
       if (['Function', 'Method', 'Class', 'Interface'].includes(n.label)) {
         symbolNames.push(n.properties.name);
       }
@@ -89,8 +87,8 @@ describe('pipeline end-to-end', () => {
     expect(callEdges.length).toBeGreaterThan(0);
 
     // handleRequest should call validateInput, saveToDb, formatResponse
-    const handleRequestCalls = callEdges.filter(e => e.source === 'handleRequest');
-    const calledByHandler = handleRequestCalls.map(e => e.target);
+    const handleRequestCalls = callEdges.filter((e) => e.source === 'handleRequest');
+    const calledByHandler = handleRequestCalls.map((e) => e.target);
     expect(calledByHandler).toContain('validateInput');
     expect(calledByHandler).toContain('saveToDb');
     expect(calledByHandler).toContain('formatResponse');
@@ -109,7 +107,7 @@ describe('pipeline end-to-end', () => {
 
     // Community nodes should be in the graph
     const communityNodes: string[] = [];
-    result.graph.forEachNode(n => {
+    result.graph.forEachNode((n) => {
       if (n.label === 'Community') communityNodes.push(n.properties.name);
     });
     expect(communityNodes.length).toBeGreaterThan(0);
@@ -126,11 +124,18 @@ describe('pipeline end-to-end', () => {
     expect(result.processResult).toBeDefined();
     expect(result.processResult?.stats.totalProcesses).toBeGreaterThan(0);
 
-    const proc = result.processResult?.processes[0] ?? { id: '', stepCount: 0, trace: [], entryPointId: '', terminalId: '', processType: '' };
+    const proc = result.processResult?.processes[0] ?? {
+      id: '',
+      stepCount: 0,
+      trace: [],
+      entryPointId: '',
+      terminalId: '',
+      processType: '',
+    };
 
     // Each process should have valid structure
     expect(proc.id).toBeTruthy();
-    expect(proc.stepCount).toBeGreaterThanOrEqual(4); // pipeline.ts serverProcessDetectionConfig.minSteps
+    expect(proc.stepCount).toBeGreaterThanOrEqual(3); // minSteps default
     expect(proc.trace.length).toBe(proc.stepCount);
     expect(proc.entryPointId).toBeTruthy();
     expect(proc.terminalId).toBeTruthy();
@@ -144,7 +149,7 @@ describe('pipeline end-to-end', () => {
     // STEP_IN_PROCESS relationships should exist with sequential ordering
     const steps: number[] = [];
     for (const rel of result.graph.iterRelationships()) {
-      if (rel.type === 'STEP_IN_PROCESS' && rel.targetId === proc.id && rel.step !== undefined) {
+      if (rel.type === 'STEP_IN_PROCESS' && rel.targetId === proc.id) {
         steps.push(rel.step);
       }
     }
@@ -168,28 +173,11 @@ describe('pipeline end-to-end', () => {
   });
 });
 
-describe('pipeline with gitnexus.filter', () => {
-  it('invalid gitnexus.filter JSON does not crash analysis', async () => {
-    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'gn-pipeline-filter-'));
-    try {
-      fsSync.cpSync(MINI_REPO, dir, { recursive: true });
-      fsSync.writeFileSync(path.join(dir, 'gitnexus.filter'), '{', 'utf8');
-      const r = await runPipelineFromRepo(dir, () => {});
-      expect(r.graph.nodeCount).toBeGreaterThan(0);
-    } finally {
-      fsSync.rmSync(dir, { recursive: true, force: true });
-    }
-  }, 90000);
-});
-
 // ─── Pipeline error handling ──────────────────────────────────────────
 
 describe('pipeline error handling', () => {
   it('returns empty result for non-existent repo path', async () => {
-    const result = await runPipelineFromRepo(
-      '/nonexistent/path/xyz123',
-      () => {},
-    );
+    const result = await runPipelineFromRepo('/nonexistent/path/xyz123', () => {});
     expect(result.totalFileCount).toBe(0);
   }, 30000);
 

@@ -4,8 +4,8 @@
  * REST API for browser-based clients to query the local .gitnexus/ index.
  * Also hosts the MCP server over StreamableHTTP for remote AI tool access.
  *
- * Security: binds to 127.0.0.1 by default (use --host to override).
- * CORS is restricted to localhost and the deployed site.
+ * Security: binds to localhost by default (use --host to override).
+ * CORS is restricted to localhost, private/LAN networks, and the deployed site.
  */
 
 import express from 'express';
@@ -13,14 +13,18 @@ import cors from 'cors';
 import path from 'path';
 import { existsSync } from 'fs';
 import fs from 'fs/promises';
-import { spawnSync, spawn } from 'child_process';
-import * as readline from 'readline';
-import { fileURLToPath } from 'url';
-import AdmZip from 'adm-zip';
-import { loadMeta, listRegisteredRepos, readRegistry } from '../storage/repo-manager.js';
-import { executeQuery, closeLbug, closeLbugForPath, withLbugDb } from '../core/lbug/lbug-adapter.js';
-import { NODE_TABLES } from '../core/lbug/schema.js';
-import { GraphNode, GraphRelationship } from '../core/graph/types.js';
+import { createRequire } from 'node:module';
+import { loadMeta, listRegisteredRepos, getStoragePath } from '../storage/repo-manager.js';
+import {
+  executeQuery,
+  executePrepared,
+  executeWithReusedStatement,
+  streamQuery,
+  closeLbug,
+  withLbugDb,
+} from '../core/lbug/lbug-adapter.js';
+import { isWriteQuery } from '../core/lbug/pool-adapter.js';
+import { NODE_TABLES, type GraphNode, type GraphRelationship } from 'gitnexus-shared';
 import { searchFTSFromLbug } from '../core/search/bm25-index.js';
 import { hybridSearch } from '../core/search/hybrid-search.js';
 import { isGitRepo } from '../storage/git.js';
@@ -29,82 +33,382 @@ import { convertWorkspaceToUtf8 } from './utf8-conversion.js';
 // at server startup — crashes on unsupported Node ABI versions (#89)
 import { LocalBackend } from '../mcp/local/local-backend.js';
 import { mountMCPEndpoints } from './mcp-http.js';
+import { fork } from 'child_process';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { JobManager } from './analyze-job.js';
+import { extractRepoName, getCloneDir, cloneOrPull } from './git-clone.js';
+import { registerLocalGitRoutes } from './local-git-routes.js';
 import { isRepoUnderMaintenance } from '../maintenance/repo-maintenance.js';
-import { parseNightlyAt, startNightlyRefreshScheduler } from './nightly-refresh.js';
 
-// Tables that require backticks in Cypher queries (matches schema definition)
-const BACKTICK_TABLES = new Set([
-  'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
-  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation',
-  'Constructor', 'Template', 'Module',
-]);
+const _require = createRequire(import.meta.url);
+const pkg = _require('../../package.json');
 
-const escapeTableName = (table: string): string => {
-  return BACKTICK_TABLES.has(table) ? `\`${table}\`` : table;
+/**
+ * Determine whether an HTTP Origin header value is allowed by CORS policy.
+ *
+ * Permitted origins:
+ * - No origin (non-browser requests such as curl or server-to-server calls)
+ * - http://localhost:<port> — local development
+ * - http://127.0.0.1:<port> — loopback alias
+ * - RFC 1918 private/LAN networks (any port):
+ *     10.0.0.0/8      → 10.x.x.x
+ *     172.16.0.0/12   → 172.16.x.x – 172.31.x.x
+ *     192.168.0.0/16  → 192.168.x.x
+ * - https://gitnexus.vercel.app — the deployed GitNexus web UI
+ *
+ * @param origin - The value of the HTTP `Origin` request header, or `undefined`
+ *                 when the header is absent (non-browser request).
+ * @returns `true` if the origin is allowed, `false` otherwise.
+ */
+export const isAllowedOrigin = (origin: string | undefined): boolean => {
+  if (origin === undefined) {
+    // Non-browser requests (curl, server-to-server) have no Origin header
+    return true;
+  }
+
+  if (
+    origin.startsWith('http://localhost:') ||
+    origin === 'http://localhost' ||
+    origin.startsWith('http://127.0.0.1:') ||
+    origin === 'http://127.0.0.1' ||
+    origin.startsWith('http://[::1]:') ||
+    origin === 'http://[::1]' ||
+    origin === 'https://gitnexus.vercel.app'
+  ) {
+    return true;
+  }
+
+  // RFC 1918 private network ranges — allow any port on these hosts.
+  // We parse the hostname out of the origin URL and check against each range.
+  let hostname: string;
+  let protocol: string;
+  try {
+    const parsed = new URL(origin);
+    hostname = parsed.hostname;
+    protocol = parsed.protocol;
+  } catch {
+    // Malformed origin — reject
+    return false;
+  }
+
+  // Only allow HTTP(S) origins — reject ftp://, file://, etc.
+  if (protocol !== 'http:' && protocol !== 'https:') return false;
+
+  const octets = hostname.split('.').map(Number);
+  if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) {
+    return false;
+  }
+
+  const [a, b] = octets;
+
+  // 10.0.0.0/8
+  if (a === 10) return true;
+  // 172.16.0.0/12  →  172.16.x.x – 172.31.x.x
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  // 192.168.0.0/16
+  if (a === 192 && b === 168) return true;
+
+  return false;
 };
 
-const buildGraph = async (): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
+type GraphStreamRecord =
+  | { type: 'node'; data: GraphNode }
+  | { type: 'relationship'; data: GraphRelationship }
+  | { type: 'error'; error: string };
+
+export class ClientDisconnectedError extends Error {
+  constructor() {
+    super('Client disconnected during graph stream');
+    this.name = 'ClientDisconnectedError';
+  }
+}
+
+export const isIgnorableGraphQueryError = (err: unknown): boolean => {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes('does not exist') ||
+    message.includes('not found') ||
+    message.includes('No table named')
+  );
+};
+
+const ensureStreamIsWritable = (res: express.Response, signal?: AbortSignal): void => {
+  if (signal?.aborted || res.destroyed || res.writableEnded) {
+    throw new ClientDisconnectedError();
+  }
+};
+
+const waitForDrain = async (res: express.Response, signal?: AbortSignal): Promise<void> => {
+  ensureStreamIsWritable(res, signal);
+
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+      signal?.removeEventListener('abort', onAbort);
+    };
+
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new ClientDisconnectedError());
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new ClientDisconnectedError());
+    };
+
+    res.once('drain', onDrain);
+    res.once('close', onClose);
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    if (signal?.aborted || res.destroyed || res.writableEnded) {
+      onAbort();
+    }
+  });
+
+  ensureStreamIsWritable(res, signal);
+};
+
+const isClientDisconnectWriteError = (err: unknown): boolean => {
+  if (!(err instanceof Error)) return false;
+  return (
+    (err as NodeJS.ErrnoException).code === 'ERR_STREAM_DESTROYED' ||
+    (err as NodeJS.ErrnoException).code === 'EPIPE' ||
+    (err as NodeJS.ErrnoException).code === 'ECONNRESET' ||
+    err.message.includes('write after end')
+  );
+};
+
+export const writeNdjsonRecord = async (
+  res: express.Response,
+  record: GraphStreamRecord,
+  signal?: AbortSignal,
+): Promise<void> => {
+  ensureStreamIsWritable(res, signal);
+
+  try {
+    const canContinue = res.write(JSON.stringify(record) + '\n');
+    if (!canContinue) {
+      await waitForDrain(res, signal);
+    }
+  } catch (err) {
+    if (isClientDisconnectWriteError(err)) {
+      throw new ClientDisconnectedError();
+    }
+    throw err;
+  }
+};
+
+const buildGraph = async (
+  includeContent = false,
+): Promise<{ nodes: GraphNode[]; relationships: GraphRelationship[] }> => {
   const nodes: GraphNode[] = [];
   for (const table of NODE_TABLES) {
     try {
-      let query = '';
-      const escapedTable = escapeTableName(table);
-      if (table === 'File') {
-        query = `MATCH (n:File) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.content AS content`;
-      } else if (table === 'Folder') {
-        query = `MATCH (n:Folder) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
-      } else if (table === 'Community') {
-        query = `MATCH (n:Community) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.cohesion AS cohesion, n.symbolCount AS symbolCount`;
-      } else if (table === 'Process') {
-        query = `MATCH (n:Process) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.processType AS processType, n.stepCount AS stepCount, n.communities AS communities, n.entryPointId AS entryPointId, n.terminalId AS terminalId`;
-      } else {
-        query = `MATCH (n:${escapedTable}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`;
-      }
-
-      const rows = await executeQuery(query);
+      const rows = await executeQuery(getNodeQuery(table, includeContent));
       for (const row of rows) {
-        nodes.push({
-          id: row.id ?? row[0],
-          label: table as GraphNode['label'],
-          properties: {
-            name: row.name ?? row.label ?? row[1],
-            filePath: row.filePath ?? row[2],
-            startLine: row.startLine,
-            endLine: row.endLine,
-            content: row.content,
-            heuristicLabel: row.heuristicLabel,
-            cohesion: row.cohesion,
-            symbolCount: row.symbolCount,
-            processType: row.processType,
-            stepCount: row.stepCount,
-            communities: row.communities,
-            entryPointId: row.entryPointId,
-            terminalId: row.terminalId,
-          } as GraphNode['properties'],
-        });
+        nodes.push(mapGraphNodeRow(table, row, includeContent));
       }
-    } catch {
-      // ignore empty tables
+    } catch (err) {
+      if (!isIgnorableGraphQueryError(err)) {
+        throw err;
+      }
     }
   }
 
   const relationships: GraphRelationship[] = [];
-  const relRows = await executeQuery(
-    `MATCH (a)-[r:CodeRelation]->(b) RETURN a.id AS sourceId, b.id AS targetId, r.type AS type, r.confidence AS confidence, r.reason AS reason, r.step AS step`
-  );
+  const relRows = await executeQuery(GRAPH_RELATIONSHIP_QUERY);
   for (const row of relRows) {
-    relationships.push({
-      id: `${row.sourceId}_${row.type}_${row.targetId}`,
-      type: row.type,
-      sourceId: row.sourceId,
-      targetId: row.targetId,
-      confidence: row.confidence,
-      reason: row.reason,
-      step: row.step,
-    });
+    relationships.push(mapGraphRelationshipRow(row));
   }
 
   return { nodes, relationships };
+};
+
+const GRAPH_RELATIONSHIP_QUERY =
+  `MATCH (a)-[r:CodeRelation]->(b) RETURN a.id AS sourceId, b.id AS targetId, ` +
+  `r.type AS type, r.confidence AS confidence, r.reason AS reason, r.step AS step`;
+
+const quoteNodeTable = (table: string): string => `\`${table.replace(/`/g, '``')}\``;
+
+const getNodeQuery = (table: string, includeContent: boolean): string => {
+  const tableLabel = quoteNodeTable(table);
+
+  if (table === 'File') {
+    return includeContent
+      ? `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.content AS content`
+      : `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
+  }
+  if (table === 'Folder') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath`;
+  }
+  if (table === 'Community') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.cohesion AS cohesion, n.symbolCount AS symbolCount`;
+  }
+  if (table === 'Process') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.label AS label, n.heuristicLabel AS heuristicLabel, n.processType AS processType, n.stepCount AS stepCount, n.communities AS communities, n.entryPointId AS entryPointId, n.terminalId AS terminalId`;
+  }
+  if (table === 'Route') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.responseKeys AS responseKeys, n.errorKeys AS errorKeys, n.middleware AS middleware`;
+  }
+  if (table === 'Tool') {
+    return `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.description AS description`;
+  }
+  return includeContent
+    ? `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine, n.content AS content`
+    : `MATCH (n:${tableLabel}) RETURN n.id AS id, n.name AS name, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine`;
+};
+
+const mapGraphNodeRow = (table: string, row: any, includeContent: boolean): GraphNode => ({
+  id: row.id ?? row[0],
+  label: table as GraphNode['label'],
+  properties: {
+    name: row.name ?? row.label ?? row[1],
+    filePath: row.filePath ?? row[2],
+    startLine: row.startLine,
+    endLine: row.endLine,
+    content: includeContent ? row.content : undefined,
+    responseKeys: row.responseKeys,
+    errorKeys: row.errorKeys,
+    middleware: row.middleware,
+    heuristicLabel: row.heuristicLabel,
+    cohesion: row.cohesion,
+    symbolCount: row.symbolCount,
+    description: row.description,
+    processType: row.processType,
+    stepCount: row.stepCount,
+    communities: row.communities,
+    entryPointId: row.entryPointId,
+    terminalId: row.terminalId,
+  } as GraphNode['properties'],
+});
+
+const mapGraphRelationshipRow = (row: any): GraphRelationship => ({
+  id: `${row.sourceId}_${row.type}_${row.targetId}`,
+  type: row.type,
+  sourceId: row.sourceId,
+  targetId: row.targetId,
+  confidence: row.confidence,
+  reason: row.reason,
+  step: row.step,
+});
+
+export const streamGraphNdjson = async (
+  res: express.Response,
+  includeContent = false,
+  signal?: AbortSignal,
+): Promise<void> => {
+  for (const table of NODE_TABLES) {
+    try {
+      await streamQuery(getNodeQuery(table, includeContent), async (row) => {
+        await writeNdjsonRecord(
+          res,
+          {
+            type: 'node',
+            data: mapGraphNodeRow(table, row, includeContent),
+          },
+          signal,
+        );
+      });
+    } catch (err) {
+      if (!isIgnorableGraphQueryError(err)) {
+        throw err;
+      }
+    }
+  }
+
+  await streamQuery(GRAPH_RELATIONSHIP_QUERY, async (row) => {
+    await writeNdjsonRecord(
+      res,
+      {
+        type: 'relationship',
+        data: mapGraphRelationshipRow(row),
+      },
+      signal,
+    );
+  });
+};
+
+/**
+ * Mount an SSE progress endpoint for a JobManager.
+ * Handles: initial state, terminal events, heartbeat, event IDs, client disconnect.
+ */
+const mountSSEProgress = (app: express.Express, routePath: string, jm: JobManager) => {
+  app.get(routePath, (req, res) => {
+    const job = jm.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+
+    let eventId = 0;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    // Send current state immediately
+    eventId++;
+    res.write(`id: ${eventId}\ndata: ${JSON.stringify(job.progress)}\n\n`);
+
+    // If already terminal, send event and close
+    if (job.status === 'complete' || job.status === 'failed') {
+      eventId++;
+      res.write(
+        `id: ${eventId}\nevent: ${job.status}\ndata: ${JSON.stringify({
+          repoName: job.repoName,
+          error: job.error,
+        })}\n\n`,
+      );
+      res.end();
+      return;
+    }
+
+    // Heartbeat to detect zombie connections
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(':heartbeat\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        unsubscribe();
+      }
+    }, 30_000);
+
+    // Subscribe to progress updates
+    const unsubscribe = jm.onProgress(job.id, (progress) => {
+      try {
+        eventId++;
+        if (progress.phase === 'complete' || progress.phase === 'failed') {
+          const eventJob = jm.getJob(req.params.jobId);
+          res.write(
+            `id: ${eventId}\nevent: ${progress.phase}\ndata: ${JSON.stringify({
+              repoName: eventJob?.repoName,
+              error: eventJob?.error,
+            })}\n\n`,
+          );
+          clearInterval(heartbeat);
+          res.end();
+          unsubscribe();
+        } else {
+          res.write(`id: ${eventId}\ndata: ${JSON.stringify(progress)}\n\n`);
+        }
+      } catch {
+        clearInterval(heartbeat);
+        unsubscribe();
+      }
+    });
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
 };
 
 const statusFromError = (err: any): number => {
@@ -139,539 +443,194 @@ export const createServer = async (
   opts?: { embeddings?: boolean; nightlyRefresh?: boolean; nightlyAt?: string },
 ) => {
   const app = express();
-  const enableEmbeddings = !!opts?.embeddings;
+  app.disable('x-powered-by');
 
-  // CORS: only allow localhost origins and the deployed site.
+  // CORS: allow localhost, private/LAN networks, and the deployed site.
   // Non-browser requests (curl, server-to-server) have no origin and are allowed.
-  app.use(cors({
-    origin: (origin, callback) => {
-      if (
-        !origin
-        || origin.startsWith('http://localhost:')
-        || origin.startsWith('http://127.0.0.1:')
-        || origin === 'https://gitnexus.vercel.app'
-      ) {
-        callback(null, true);
-      } else {
-        callback(null, true);
-      }
-    }
-  }));
+  // Disallowed origins get the response without Access-Control-Allow-Origin,
+  // so the browser blocks it. We pass `false` instead of throwing an Error to
+  // avoid crashing into Express's default error handler (which returned 500).
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        callback(null, isAllowedOrigin(origin));
+      },
+    }),
+  );
   app.use(express.json({ limit: '10mb' }));
+
+  // Support Chromium Private Network Access (required since Chrome 130+).
+  // Without this header, Chrome/Edge/Brave/Arc block public->loopback requests
+  // which breaks bridge mode entirely.
+  app.use((_req, res, next) => {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    next();
+  });
+
+  // Handle PNA preflight: Chromium sends Access-Control-Request-Private-Network
+  // on OPTIONS requests and expects the allow header in the response.
+  // Note: the actual Allow-Private-Network header is already set by the global
+  // middleware above, so we just need to call next() here.
+  app.options('*', (_req, res, next) => {
+    next();
+  });
 
   // Initialize MCP backend (multi-repo, shared across all MCP sessions)
   const backend = new LocalBackend();
   await backend.init();
   const cleanupMcp = mountMCPEndpoints(app, backend);
+  const jobManager = new JobManager();
 
-  // Helper: resolve a repo by name from the global registry, or default to first
-  const resolveRepo = async (repoName?: string) => {
+  registerLocalGitRoutes(app, { enableEmbeddings: !!opts?.embeddings });
+
+  // Shared repo lock — prevents concurrent analyze + embed on the same repo path,
+  // which would corrupt LadybugDB (analyze calls closeLbug + initLbug while embed has queries in flight).
+  const activeRepoPaths = new Set<string>();
+
+  const acquireRepoLock = (repoPath: string): string | null => {
+    if (activeRepoPaths.has(repoPath)) {
+      return `Another job is already active for this repository`;
+    }
+    activeRepoPaths.add(repoPath);
+    return null;
+  };
+
+  const releaseRepoLock = (repoPath: string): void => {
+    activeRepoPaths.delete(repoPath);
+  };
+
+  /**
+   * Maximum time the hold-queue will wait for an active analysis job to complete.
+   * Must stay in sync with the frontend's `fetchRepoInfo({ awaitAnalysis: true })` timeout.
+   */
+  const HOLD_QUEUE_TIMEOUT_SECS = 300; // 5 minutes
+
+  // Helper: resolve a repo by name from the global registry, or default to first.
+  // Pass `req` to enable early exit if the client disconnects during the hold-queue wait.
+  const resolveRepo = async (repoName?: string, isRetry = false, req?: any): Promise<any> => {
     const repos = await listRegisteredRepos();
-    if (repos.length === 0) return null;
-    if (repoName) return repos.find(r => r.name === repoName) || null;
-    return repos[0]; // default to first
-  };
+    let found = null;
 
-  // 一键下载并分析：代码目录 = HOME 或 启动路径，子目录 ginexus_code；已在 registry 则禁止重复下载
-  const GINEXUS_CODE_DIR = 'gitnexus_code';
-  const getCodeBaseDir = (): string => process.env.HOME || process.cwd();
-  const getCodeDir = (): string => path.join(getCodeBaseDir(), GINEXUS_CODE_DIR);
+    // Normalize: if a full path is passed, extract just the basename.
+    // e.g. "C:\Users\LENOVO\.gitnexus\repos\todo.txt-cli" -> "todo.txt-cli"
+    const normalizedName = repoName ? path.basename(repoName) : undefined;
 
-  const getRepoNameFromUrl = (url: string): string | null => {
-    const trimmed = url.trim().replace(/\.git$/i, '');
-    try {
-      const u = new URL(trimmed);
-      const segs = u.pathname.split('/').filter(Boolean);
-      return segs.length ? segs[segs.length - 1] : null;
-    } catch {
-      return null;
-    }
-  };
-
-  const pathEquals = (a: string, b: string): boolean => {
-    const x = path.resolve(a);
-    const y = path.resolve(b);
-    return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
-  };
-
-  app.post('/api/repos/clone-analyze', async (req, res) => {
-    // 先进行所有错误检查，再设置流式响应 headers
-    const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
-    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : undefined;
-    const branch = typeof req.body?.branch === 'string' ? req.body.branch.trim() : undefined;
-    
-    // 错误检查：在设置流式响应之前完成
-    if (!url) {
-      res.status(400).json({ error: 'Missing url in body. Example: { "url": "https://host/org/repo.git", "token": "optional", "branch": "optional" }' });
-      return;
-    }
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      res.status(400).json({ error: 'Invalid URL' });
-      return;
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      res.status(400).json({ error: 'Only http/https URLs are allowed' });
-      return;
-    }
-    const repoName = getRepoNameFromUrl(url);
-    if (!repoName) {
-      res.status(400).json({ error: 'Could not get repo name from URL' });
-      return;
-    }
-    const codeDir = getCodeDir();
-    // 若指定了分支，目录名用「@@」与分支后缀连接（全平台路径合法；单「_」易与仓库名混淆）。与前端 resolveRepoName 一致。
-    const dirSuffix = branch ? `@@${branch.replace(/[^a-zA-Z0-9_\-]/g, '_')}` : '';
-    const targetPath = path.resolve(codeDir, repoName + dirSuffix);
-
-    const entries = await readRegistry();
-    if (entries.some((e) => pathEquals(e.path, targetPath))) {
-      res.json({ ok: true, alreadyExists: true, path: targetPath, message: 'Repo already in registry, skip clone' });
-      return;
+    if (normalizedName) {
+      found =
+        repos.find((r) => r.name === normalizedName) ||
+        repos.find((r) => r.name.toLowerCase() === normalizedName.toLowerCase()) ||
+        null;
+    } else if (repos.length > 0) {
+      found = repos[0]; // default to first repo
     }
 
-    // 所有错误检查通过后，再建立流式响应连接
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders?.();
-    const send = (data: object) => {
-      try {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-      } catch (e) {
-        // 客户端可能已断开连接
-      }
-    };
+    // If not yet in the registry, check whether a background job is actively cloning or
+    // analyzing this repo. Hold the connection open (up to 5 minutes) until it completes.
+    // We only wait for in-progress jobs ('queued'|'cloning'|'analyzing') — a 'complete' job
+    // whose repo is still missing means the registry sync failed; the fallback below handles it.
+    if (!found && normalizedName) {
+      const lower = normalizedName.toLowerCase();
 
-    try {
-
-      await fs.mkdir(codeDir, { recursive: true });
-
-      // 发送clone开始事件
-      send({ type: 'progress', phase: 'cloning', percent: 0 });
-      console.log('[clone-analyze] clone start:', url, branch ? `(branch: ${branch})` : '(default branch)');
-
-      const cloneUrl = token
-        ? `${parsed.protocol}//${encodeURIComponent(token)}@${parsed.host}${parsed.pathname}${url.endsWith('.git') ? '' : '.git'}`
-        : url.replace(/\.git$/i, '') + (url.match(/\.git$/i) ? '' : '.git');
-      const cloneArgs = ['clone', '--depth', '1', '--progress'];
-      if (branch) {
-        cloneArgs.push('--branch', branch, '--single-branch');
-      }
-      cloneArgs.push(cloneUrl, targetPath);
-
-      // 使用spawn而不是spawnSync，以便在clone过程中发送进度更新
-      const cloneProcess = spawn('git', cloneArgs, {
-        stdio: ['ignore', 'pipe', 'pipe'],
+      // Track client disconnect to cancel the wait early
+      let clientGone = false;
+      req?.on('close', () => {
+        clientGone = true;
       });
 
-      let cloneOutput = '';
-      const cloneStartTime = Date.now();
-      // 克隆阶段占总进度 0-5%，以 300 秒为满估算时间进度（单调递增）
-      const CLONE_TIMEOUT_S = 300;
-      let lastClonePercent = 0;
+      for (const job of jobManager.listJobs()) {
+        const isMatch =
+          job.repoName?.toLowerCase() === lower ||
+          (job.repoUrl && path.basename(job.repoUrl).replace('.git', '').toLowerCase() === lower) ||
+          (job.repoPath && path.basename(job.repoPath).toLowerCase() === lower);
 
-      const calcTimePercent = () => {
-        const elapsed = (Date.now() - cloneStartTime) / 1000;
-        // 对数曲线：前期增长快，后期趋缓，最高到 4.8（留 0.2 给完成跳 5）
-        const ratio = Math.min(elapsed / CLONE_TIMEOUT_S, 0.99);
-        return Math.round(-Math.log(1 - ratio) / -Math.log(1 - 0.99) * 48) / 10; // 0-4.8
-      };
-
-      const cloneHeartbeatInterval = setInterval(() => {
-        const timePct = calcTimePercent();
-        if (timePct > lastClonePercent) {
-          lastClonePercent = timePct;
-          const elapsed = Math.round((Date.now() - cloneStartTime) / 1000);
-          send({ type: 'progress', phase: 'cloning', percent: lastClonePercent, detail: `Cloning... (${elapsed}s)` });
-        }
-      }, 1000); // 每秒更新一次
-
-      const handleCloneProgress = (output: string) => {
-        // git clone --progress 输出类似 "Receiving objects: 50% (100/200)" 的进度
-        // 若有真实 git 百分比，与时间估算取较大值，确保单调递增
-        const progressMatch = output.match(/(\d+)%/);
-        if (progressMatch) {
-          const rawPct = parseInt(progressMatch[1], 10);
-          const gitMapped = rawPct / 100 * 4.8; // git 0-100% → 0-4.8
-          const timePct = calcTimePercent();
-          const best = Math.max(gitMapped, timePct);
-          if (best > lastClonePercent) {
-            lastClonePercent = best;
-            send({ type: 'progress', phase: 'cloning', percent: lastClonePercent });
+        if (isMatch && ['queued', 'cloning', 'analyzing'].includes(job.status)) {
+          if (process.env.DEBUG) {
+            console.log(
+              `[debug] resolveRepo waiting for active job ${job.id} (${normalizedName})...`,
+            );
           }
-        }
-      };
-
-      if (cloneProcess.stdout) {
-        cloneProcess.stdout.on('data', (chunk) => {
-          const output = chunk.toString('utf-8');
-          cloneOutput += output;
-          handleCloneProgress(output);
-        });
-      }
-
-      if (cloneProcess.stderr) {
-        cloneProcess.stderr.on('data', (chunk) => {
-          const output = chunk.toString('utf-8');
-          cloneOutput += output;
-          // git clone --progress 的进度信息也会输出到 stderr
-          handleCloneProgress(output);
-        });
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        cloneProcess.on('close', async (code) => {
-          clearInterval(cloneHeartbeatInterval);
-          if (code !== 0) {
-            const stderr = cloneOutput || (cloneProcess.stderr ? cloneProcess.stderr.read()?.toString('utf-8') : '') || '';
-            console.error('[clone-analyze] git clone failed:', stderr);
-            
-            // 检查是否是目录已存在的错误
-            if (stderr.includes('already exists and is not an empty directory')) {
-              // 检查目录是否是有效的 git 仓库
-              if (isGitRepo(targetPath)) {
-                // 检查是否已经在 registry 中
-                const entries = await readRegistry();
-                const existsInRegistry = entries.some((e) => pathEquals(e.path, targetPath));
-                
-                if (existsInRegistry) {
-                  console.log('[clone-analyze] Directory exists and is in registry, returning alreadyExists');
-                  send({ type: 'done', ok: true, alreadyExists: true, path: targetPath, message: 'Repo already exists and is indexed' });
-                  resolve();
-                  return;
-                } else {
-                  // 目录存在且是有效的 git 仓库，但不在 registry 中
-                  // 返回 alreadyExists，让前端跳转到 server 模式
-                  console.log('[clone-analyze] Directory exists and is a valid git repo, but not in registry. Returning alreadyExists to trigger server mode.');
-                  send({ type: 'done', ok: true, alreadyExists: true, path: targetPath, message: 'Repo directory exists, please use server mode' });
-                  resolve();
-                  return;
-                }
-              }
+          for (let wait = 0; wait < HOLD_QUEUE_TIMEOUT_SECS; wait++) {
+            if (clientGone) return null; // client disconnected — stop polling
+            const currentJob = jobManager.getJob(job.id);
+            if (!currentJob || currentJob.status === 'failed') break;
+            if (currentJob.status === 'complete') {
+              await backend.init();
+              const freshRepos = await listRegisteredRepos();
+              return freshRepos.find((r) => r.name === normalizedName) || null;
             }
-            
-            send({ type: 'done', ok: false, error: 'Clone failed', details: stderr.slice(0, 500) });
-            reject(new Error('Clone failed: ' + stderr.slice(0, 500)));
-          } else {
-            console.log('[clone-analyze] clone done:', targetPath);
-            send({ type: 'clone_done', path: targetPath });
-            resolve();
+            await new Promise((r) => setTimeout(r, 1000));
           }
-        });
-        cloneProcess.on('error', (err) => {
-          clearInterval(cloneHeartbeatInterval);
-          console.error('[clone-analyze] git clone error:', err);
-          send({ type: 'done', ok: false, error: err.message });
-          reject(err);
-        });
-      });
-
-      const __dirnameServer = path.dirname(fileURLToPath(import.meta.url));
-      const pkgRoot = path.resolve(__dirnameServer, '../..');
-
-      // UTF-8转换阶段：percent 跟随克隆完成时的实际进度（与 convert_to_utf8.py 一致：GBK 等 → UTF-8）
-      send({ type: 'progress', phase: 'converting', percent: Math.max(lastClonePercent, 5) });
-      convertWorkspaceToUtf8(targetPath, '[clone-analyze]');
-
-      console.log('[clone-analyze] -> starting analyze');
-      send({ type: 'progress', phase: 'Scanning files', percent: 5 });
-
-      const cliPath = path.join(__dirnameServer, '../cli/index.js');
-      const nodeOptions = (process.env.NODE_OPTIONS || '').trim();
-      const analyzeEnv = {
-        ...process.env,
-        NODE_OPTIONS: nodeOptions ? `${nodeOptions} --max-old-space-size=8192` : '--max-old-space-size=8192',
-        GITNEXUS_PROGRESS: '1',
-      };
-      const analyzeArgs = [cliPath, 'analyze', targetPath];
-      if (enableEmbeddings) {
-        analyzeArgs.push('--embeddings');
-        console.log('[clone-analyze] embeddings enabled for this run');
-      }
-      const child = spawn(process.execPath, analyzeArgs, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: pkgRoot,
-        env: analyzeEnv,
-      });
-      const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
-      let doneSent = false;
-      let lastPhase = '';
-      let lastPercent = -1;
-      let lastFilesProcessed: number | undefined = undefined;
-      let lastTotalFiles: number | undefined = undefined;
-      const finishResponse = () => {
-        if (doneSent) return;
-        doneSent = true;
-        res.end();
-      };
-
-      // 过滤stderr中的噪音日志
-      const shouldFilterStderr = (msg: string): boolean => {
-        // 过滤掉"Unable to determine content-length"警告（来自@huggingface/transformers）
-        if (msg.includes('Unable to determine content-length') || msg.includes('Will expand buffer when needed')) {
-          return true;
+          // Timed out — signal to the caller with a specific message
+          return { __timedOut: true, repoName: normalizedName };
         }
-        return false;
-      };
-
-      rl.on('line', (line) => {
-        if (doneSent) return;
-        const trimmed = line.trim();
-        if (!trimmed) return;
-        try {
-          const data = JSON.parse(trimmed);
-          if (data.done) {
-            // 分析完成，先推进到 95% 再发 done，避免前端停在 93%
-            send({ type: 'progress', phase: 'Analysis complete', percent: 95 });
-            send({ type: 'done', ok: true, path: data.path ?? targetPath });
-            finishResponse();
-          } else {
-            const phase = data.phase ?? '';
-            const percent = typeof data.percent === 'number' ? data.percent : 0;
-            const filesProcessed = typeof data.filesProcessed === 'number' ? data.filesProcessed : undefined;
-            const totalFiles = typeof data.totalFiles === 'number' ? data.totalFiles : undefined;
-            // 将analyze的进度映射到5-95%范围（clone占0-5%，analyze占5-95%）
-            // analyze.ts内部进度：pipeline(0-60%), lbug(60-85%), fts(85-90%), embedding(90-98%), finalize(98-100%)
-            // 映射到：pipeline(5-59%), lbug(59-82.5%), fts(82.5-86%), embedding(86-93.2%), finalize(93.2-95%)
-            const mappedPercent = 5 + Math.round(percent * 0.9);
-            // 检查是否有变化：phase、percent 或文件数量
-            const phaseChanged = phase !== lastPhase;
-            const percentChanged = mappedPercent !== lastPercent;
-            const filesChanged = filesProcessed !== lastFilesProcessed || totalFiles !== lastTotalFiles;
-            if (phaseChanged || percentChanged || filesChanged) {
-              lastPhase = phase;
-              lastPercent = mappedPercent;
-              lastFilesProcessed = filesProcessed;
-              lastTotalFiles = totalFiles;
-              const progressData: any = { type: 'progress', phase, percent: mappedPercent };
-              if (filesProcessed !== undefined) progressData.filesProcessed = filesProcessed;
-              if (totalFiles !== undefined) progressData.totalFiles = totalFiles;
-              send(progressData);
-            }
-          }
-        } catch {
-          // 非 JSON 行（如 "GitNexus Analyzer" 标题、空行等）直接忽略，不作为进度发出
-        }
-      });
-      child.stderr?.on('data', (chunk) => {
-        const msg = chunk.toString();
-        // 过滤噪音日志
-        if (!shouldFilterStderr(msg)) {
-          process.stderr.write('[clone-analyze] ' + msg);
-        }
-      });
-      child.on('close', async (code) => {
-        console.log('[clone-analyze] analyze exit code:', code, targetPath);
-        rl.close();
-        // 关闭后台服务对该数据库的连接，释放文件锁
-        // analyze 子进程已经关闭了自己的连接，但后台服务可能仍然持有连接
-        try {
-          const { getStoragePaths } = await import('../storage/repo-manager.js');
-          const { lbugPath } = getStoragePaths(targetPath);
-          await closeLbugForPath(lbugPath);
-        } catch (err) {
-          // 忽略错误，可能数据库路径不存在或已关闭
-        }
-        if (!doneSent) {
-          if (code === 0) send({ type: 'done', ok: true, path: targetPath });
-          else send({ type: 'done', ok: false, error: 'Analyze exited with code ' + code });
-          finishResponse();
-        }
-      });
-      child.on('error', (err) => {
-        rl.close();
-        send({ type: 'done', ok: false, error: err.message });
-        res.end();
-      });
-    } catch (err: any) {
-      console.error('[clone-analyze]', err);
-      // 如果 headers 已经发送（流式响应已建立），使用 send 发送错误
-      // 否则使用 JSON 响应
-      if (res.headersSent) {
-        send({ type: 'done', ok: false, error: err?.message || String(err) });
-        res.end();
-      } else {
-        res.status(500).json({ error: err?.message || String(err) });
       }
     }
+
+    // Emergency fallback: re-sync the registry to handle Windows file-system race conditions
+    // (e.g. registry file not yet flushed after clone completes).
+    if (!found && normalizedName && !isRetry) {
+      if (process.env.DEBUG) {
+        console.log(`[debug] resolveRepo 404 for "${normalizedName}". Triggering deep init...`);
+      }
+      await backend.init();
+      return await resolveRepo(normalizedName, true, req);
+    }
+
+    return found;
+  };
+
+  // SSE heartbeat — clients connect to detect server liveness instantly.
+  // When the server shuts down, the TCP connection drops and the client's
+  // EventSource fires onerror immediately (no polling delay).
+  app.get('/api/heartbeat', (_req, res) => {
+    // Use res.set() instead of res.writeHead() to preserve CORS headers from middleware
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    // Send initial ping so the client knows it connected
+    res.write(':ok\n\n');
+
+    // Keep-alive ping every 15s to prevent proxy/firewall timeout
+    const interval = setInterval(() => res.write(':ping\n\n'), 15_000);
+
+    _req.on('close', () => clearInterval(interval));
   });
 
-  // ZIP 上传并分析：接收 zip 文件，解压到 gitnexus_code/{zip名}，执行 analyze（参考 clone-analyze）
-  app.post(
-    '/api/repos/zip-upload-analyze',
-    express.raw({ type: '*/*', limit: '500mb' }),
-    async (req, res) => {
-      try {
-        const zipName = (typeof req.headers['x-zip-name'] === 'string' ? req.headers['x-zip-name'] : '').trim();
-        if (!zipName || !/\.zip$/i.test(zipName)) {
-          res.status(400).json({ error: 'Missing or invalid X-Zip-Name header. Must be a .zip filename.' });
-          return;
-        }
-        const body = req.body;
-        if (!Buffer.isBuffer(body) || body.length === 0) {
-          res.status(400).json({ error: 'Missing or empty zip file body' });
-          return;
-        }
-        const repoName = zipName.replace(/\.zip$/i, '') + '_zip';
-        const codeDir = getCodeDir();
-        const targetPath = path.resolve(codeDir, repoName);
-
-        const entries = await readRegistry();
-        if (entries.some((e) => pathEquals(e.path, targetPath))) {
-          res.json({ ok: true, alreadyExists: true, path: targetPath, repoName, message: 'Zip already uploaded and indexed' });
-          return;
-        }
-
-        await fs.mkdir(codeDir, { recursive: true });
-        console.log('[zip-upload-analyze] extract start:', zipName);
-        const zip = new AdmZip(body);
-
-        // ZIP 内容可能有单个顶层目录（如 project-main/），也可能直接是文件
-        // 统一解压到临时目录，再判断是否需要提升一层
-        const tmpExtractPath = targetPath + '__zip_tmp__';
-        zip.extractAllTo(tmpExtractPath, true);
-
-        // 检查是否只有一个顶层目录（常见于 GitHub 下载的 zip）
-        const topEntries = await fs.readdir(tmpExtractPath);
-        let actualSrcPath = tmpExtractPath;
-        if (topEntries.length === 1) {
-          const single = path.join(tmpExtractPath, topEntries[0]);
-          try {
-            const stat = await fs.stat(single);
-            if (stat.isDirectory()) actualSrcPath = single;
-          } catch { /* ignore */ }
-        }
-
-        // 移动到最终目录
-        await fs.rename(actualSrcPath, targetPath);
-        // 清理临时目录（若提升了一层，tmpExtractPath 还在）
-        try { await fs.rm(tmpExtractPath, { recursive: true, force: true }); } catch { /* ignore */ }
-
-        console.log('[zip-upload-analyze] extract done:', targetPath);
-
-        // analyze 要求目标是 git 仓库，ZIP 解压没有 .git，自动 git init
-        const gitDir = path.join(targetPath, '.git');
-        const hasGit = existsSync(gitDir);
-        if (!hasGit) {
-          const gitInitResult = spawnSync('git', ['init', targetPath], { stdio: 'pipe', encoding: 'utf-8' });
-          if (gitInitResult.status !== 0) {
-            console.warn('[zip-upload-analyze] git init failed:', gitInitResult.stderr);
-          } else {
-            // 做一次初始提交，让 analyze 能拿到 commit hash
-            spawnSync('git', ['-C', targetPath, 'add', '-A'], { stdio: 'pipe', encoding: 'utf-8' });
-            spawnSync('git', ['-C', targetPath, 'commit', '--allow-empty', '-m', 'init from zip upload', '--author', 'gitnexus <gitnexus@local>'], {
-              stdio: 'pipe', encoding: 'utf-8',
-              env: { ...process.env, GIT_AUTHOR_NAME: 'gitnexus', GIT_AUTHOR_EMAIL: 'gitnexus@local', GIT_COMMITTER_NAME: 'gitnexus', GIT_COMMITTER_EMAIL: 'gitnexus@local' },
-            });
-            console.log('[zip-upload-analyze] git init done:', targetPath);
-          }
-        }
-
-        convertWorkspaceToUtf8(targetPath, '[zip-upload-analyze]');
-
-        const __dirnameServer = path.dirname(fileURLToPath(import.meta.url));
-        const pkgRoot = path.resolve(__dirnameServer, '../..');
-
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Accel-Buffering', 'no');
-        res.flushHeaders?.();
-        const send = (data: object) => {
-          res.write(`data: ${JSON.stringify(data)}\n\n`);
-        };
-        send({ type: 'extract_done', path: targetPath });
-
-        const cliPath = path.join(__dirnameServer, '../cli/index.js');
-        const nodeOptions = (process.env.NODE_OPTIONS || '').trim();
-        const analyzeEnv = {
-          ...process.env,
-          NODE_OPTIONS: nodeOptions ? `${nodeOptions} --max-old-space-size=8192` : '--max-old-space-size=8192',
-          GITNEXUS_PROGRESS: '1',
-        };
-        const analyzeArgs = [cliPath, 'analyze', targetPath];
-        if (enableEmbeddings) {
-          analyzeArgs.push('--embeddings');
-          console.log('[zip-upload-analyze] embeddings enabled');
-        }
-        const child = spawn(process.execPath, analyzeArgs, {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          cwd: pkgRoot,
-          env: analyzeEnv,
-        });
-        const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
-        let doneSent = false;
-        let lastPhase = '';
-        let lastPercent = -1;
-        const finishResponse = () => {
-          if (doneSent) return;
-          doneSent = true;
-          res.end();
-        };
-        rl.on('line', (line) => {
-          if (doneSent) return;
-          const trimmed = line.trim();
-          if (!trimmed) return;
-          try {
-            const data = JSON.parse(trimmed);
-            if (data.done) {
-              send({ type: 'done', ok: true, path: data.path ?? targetPath, repoName });
-              finishResponse();
-            } else {
-              const phase = data.phase ?? '';
-              const percent = typeof data.percent === 'number' ? data.percent : 0;
-              if (phase !== lastPhase || percent !== lastPercent) {
-                lastPhase = phase;
-                lastPercent = percent;
-                send({ type: 'progress', phase, percent });
-              }
-            }
-          } catch {
-            if (trimmed !== lastPhase || 0 !== lastPercent) {
-              lastPhase = trimmed;
-              lastPercent = 0;
-              send({ type: 'progress', phase: trimmed, percent: 0 });
-            }
-          }
-        });
-        child.stderr?.on('data', (chunk) => {
-          process.stderr.write('[zip-upload-analyze] ' + chunk.toString());
-        });
-        child.on('close', (code) => {
-          console.log('[zip-upload-analyze] analyze exit code:', code, targetPath);
-          rl.close();
-          if (!doneSent) {
-            if (code === 0) send({ type: 'done', ok: true, path: targetPath, repoName });
-            else send({ type: 'done', ok: false, error: 'Analyze exited with code ' + code });
-            finishResponse();
-          }
-        });
-        child.on('error', (err) => {
-          rl.close();
-          send({ type: 'done', ok: false, error: err.message });
-          res.end();
-        });
-      } catch (err: any) {
-        console.error('[zip-upload-analyze]', err);
-        res.status(500).json({ error: err?.message || String(err) });
-      }
+  // Server info: version and launch context (npx / global / local dev)
+  app.get('/api/info', (_req, res) => {
+    const execPath = process.env.npm_execpath ?? '';
+    const argv0 = process.argv[1] ?? '';
+    let launchContext: 'npx' | 'global' | 'local';
+    if (
+      execPath.includes('npx') ||
+      argv0.includes('_npx') ||
+      process.env.npm_config_prefix?.includes('_npx')
+    ) {
+      launchContext = 'npx';
+    } else if (argv0.includes('node_modules')) {
+      launchContext = 'local';
+    } else {
+      launchContext = 'global';
     }
-  );
+    res.json({ version: pkg.version, launchContext, nodeVersion: process.version });
+  });
 
   // List all registered repos
   app.get('/api/repos', async (_req, res) => {
     try {
       const repos = await listRegisteredRepos();
-      res.json(repos.map(r => ({
-        name: r.name, path: r.path, indexedAt: r.indexedAt,
-        lastCommit: r.lastCommit, stats: r.stats,
-        branch: r.branch,
-        maintenance: isRepoUnderMaintenance(r.name),
-      })));
+      res.json(
+        repos.map((r) => ({
+          name: r.name,
+          path: r.path,
+          indexedAt: r.indexedAt,
+          lastCommit: r.lastCommit,
+          stats: r.stats,
+        })),
+      );
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to list repos' });
     }
@@ -680,13 +639,16 @@ export const createServer = async (
   // Get repo info
   app.get('/api/repo', async (req, res) => {
     try {
-      const entry = await resolveRepo(requestedRepo(req));
+      const entry = await resolveRepo(requestedRepo(req), false, req);
       if (!entry) {
         res.status(404).json({ error: 'Repository not found. Run: gitnexus analyze' });
         return;
       }
-      if (isRepoUnderMaintenance(entry.name)) {
-        maintenanceJson(res, entry.name);
+      // Timed out waiting for an active analysis job
+      if (entry.__timedOut) {
+        res.status(503).json({
+          error: `Repository analysis for "${entry.repoName}" is taking longer than expected. Please try again in a moment.`,
+        });
         return;
       }
       const meta = await loadMeta(entry.storagePath);
@@ -701,6 +663,65 @@ export const createServer = async (
     }
   });
 
+  // Delete a repo — removes index, clone dir (if any), and unregisters it
+  app.delete('/api/repo', async (req, res) => {
+    try {
+      const repoName = requestedRepo(req);
+      if (!repoName) {
+        res.status(400).json({ error: 'Missing repo name' });
+        return;
+      }
+      const entry = await resolveRepo(repoName);
+      if (!entry) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+
+      // Acquire repo lock — prevents deleting while analyze/embed is in flight
+      const lockKey = getStoragePath(entry.path);
+      const lockErr = acquireRepoLock(lockKey);
+      if (lockErr) {
+        res.status(409).json({ error: lockErr });
+        return;
+      }
+
+      try {
+        // Close any open LadybugDB handle before deleting files
+        try {
+          await closeLbug();
+        } catch {}
+
+        // 1. Delete the .gitnexus index/storage directory
+        const storagePath = getStoragePath(entry.path);
+        await fs.rm(storagePath, { recursive: true, force: true }).catch(() => {});
+
+        // 2. Delete the cloned repo dir if it lives under ~/.gitnexus/repos/
+        const cloneDir = getCloneDir(entry.name);
+        try {
+          const stat = await fs.stat(cloneDir);
+          if (stat.isDirectory()) {
+            await fs.rm(cloneDir, { recursive: true, force: true });
+          }
+        } catch {
+          /* clone dir may not exist (local repos) */
+        }
+
+        // 3. Unregister from the global registry
+        const { unregisterRepo } = await import('../storage/repo-manager.js');
+        await unregisterRepo(entry.path);
+
+        // 4. Reinitialize backend to reflect the removal
+        await backend.init().catch(() => {});
+
+        res.json({ deleted: entry.name });
+      } finally {
+        releaseRepoLock(lockKey);
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to delete repo' });
+    }
+  });
+
   // Get full graph
   app.get('/api/graph', async (req, res) => {
     try {
@@ -709,15 +730,62 @@ export const createServer = async (
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
-      if (isRepoUnderMaintenance(entry.name)) {
-        maintenanceJson(res, entry.name);
+      const lbugPath = path.join(entry.storagePath, 'lbug');
+      const includeContent = req.query.includeContent === 'true';
+      const stream = req.query.stream === 'true';
+
+      if (stream) {
+        const abortController = new AbortController();
+        let responseFinished = false;
+        const markFinished = () => {
+          responseFinished = true;
+        };
+        const abortStreaming = () => {
+          if (!responseFinished) {
+            abortController.abort();
+          }
+        };
+
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.flushHeaders();
+
+        req.once('aborted', abortStreaming);
+        res.once('finish', markFinished);
+        res.once('close', abortStreaming);
+
+        try {
+          await withLbugDb(lbugPath, async () =>
+            streamGraphNdjson(res, includeContent, abortController.signal),
+          );
+          if (!abortController.signal.aborted && !res.writableEnded) {
+            res.end();
+          }
+        } finally {
+          req.off('aborted', abortStreaming);
+          res.off('finish', markFinished);
+          res.off('close', abortStreaming);
+        }
         return;
       }
-      const lbugPath = path.join(entry.storagePath, 'lbug');
-      const graph = await withLbugDb(lbugPath, async () => buildGraph());
+
+      const graph = await withLbugDb(lbugPath, async () => buildGraph(includeContent));
       res.json(graph);
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to build graph' });
+      if (err instanceof ClientDisconnectedError) {
+        return;
+      }
+      const message = err.message || 'Failed to build graph';
+      if (res.headersSent) {
+        try {
+          res.write(JSON.stringify({ type: 'error', error: message }) + '\n');
+        } catch {
+          // Best-effort only after streaming has started.
+        }
+        res.end();
+        return;
+      }
+      res.status(500).json({ error: message });
     }
   });
 
@@ -730,13 +798,14 @@ export const createServer = async (
         return;
       }
 
+      if (isWriteQuery(cypher)) {
+        res.status(403).json({ error: 'Write queries are not allowed via the HTTP API' });
+        return;
+      }
+
       const entry = await resolveRepo(requestedRepo(req));
       if (!entry) {
         res.status(404).json({ error: 'Repository not found' });
-        return;
-      }
-      if (isRepoUnderMaintenance(entry.name)) {
-        maintenanceJson(res, entry.name);
         return;
       }
       const lbugPath = path.join(entry.storagePath, 'lbug');
@@ -747,7 +816,7 @@ export const createServer = async (
     }
   });
 
-  // Search
+  // Search (supports mode: 'hybrid' | 'semantic' | 'bm25', and optional enrichment)
   app.post('/api/search', async (req, res) => {
     try {
       const query = (req.body.query ?? '').trim();
@@ -761,24 +830,134 @@ export const createServer = async (
         res.status(404).json({ error: 'Repository not found' });
         return;
       }
-      if (isRepoUnderMaintenance(entry.name)) {
-        maintenanceJson(res, entry.name);
-        return;
-      }
       const lbugPath = path.join(entry.storagePath, 'lbug');
       const parsedLimit = Number(req.body.limit ?? 10);
       const limit = Number.isFinite(parsedLimit)
         ? Math.max(1, Math.min(100, Math.trunc(parsedLimit)))
         : 10;
+      const mode: string = req.body.mode ?? 'hybrid';
+      const enrich: boolean = req.body.enrich !== false; // default true
 
       const results = await withLbugDb(lbugPath, async () => {
-        const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
-        if (await isEmbedderReady()) {
-          const { semanticSearch } = await import('../core/embeddings/embedding-pipeline.js');
-          return hybridSearch(query, limit, executeQuery, semanticSearch);
+        let searchResults: any[];
+
+        if (mode === 'semantic') {
+          const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
+          if (!isEmbedderReady()) {
+            return [] as any[];
+          }
+          const { semanticSearch: semSearch } =
+            await import('../core/embeddings/embedding-pipeline.js');
+          searchResults = await semSearch(executeQuery, query, limit);
+          // Normalize semantic results to HybridSearchResult shape
+          searchResults = searchResults.map((r: any, i: number) => ({
+            ...r,
+            score: r.score ?? 1 - (r.distance ?? 0),
+            rank: i + 1,
+            sources: ['semantic'],
+          }));
+        } else if (mode === 'bm25') {
+          searchResults = await searchFTSFromLbug(query, limit);
+          searchResults = searchResults.map((r: any, i: number) => ({
+            ...r,
+            rank: i + 1,
+            sources: ['bm25'],
+          }));
+        } else {
+          // hybrid (default)
+          const { isEmbedderReady } = await import('../core/embeddings/embedder.js');
+          if (isEmbedderReady()) {
+            const { semanticSearch: semSearch } =
+              await import('../core/embeddings/embedding-pipeline.js');
+            searchResults = await hybridSearch(query, limit, executeQuery, semSearch);
+          } else {
+            searchResults = await searchFTSFromLbug(query, limit);
+          }
         }
-        // FTS-only fallback when embeddings aren't loaded
-        return searchFTSFromLbug(query, limit);
+
+        if (!enrich) return searchResults;
+
+        // Server-side enrichment: add connections, cluster, processes per result
+        // Uses parameterized queries to prevent Cypher injection via nodeId
+        const validLabel = (label: string): boolean =>
+          (NODE_TABLES as readonly string[]).includes(label);
+
+        const enriched = await Promise.all(
+          searchResults.slice(0, limit).map(async (r: any) => {
+            const nodeId: string = r.nodeId || r.id || '';
+            const nodeLabel = nodeId.split(':')[0];
+            const enrichment: { connections?: any; cluster?: string; processes?: any[] } = {};
+
+            if (!nodeId || !validLabel(nodeLabel)) return { ...r, ...enrichment };
+
+            // Run connections, cluster, and process queries in parallel
+            // Label is validated against NODE_TABLES (compile-time safe identifiers);
+            // nodeId uses $nid parameter binding to prevent injection
+            const [connRes, clusterRes, procRes] = await Promise.all([
+              executePrepared(
+                `
+              MATCH (n:${nodeLabel} {id: $nid})
+              OPTIONAL MATCH (n)-[r1:CodeRelation]->(dst)
+              OPTIONAL MATCH (src)-[r2:CodeRelation]->(n)
+              RETURN
+                collect(DISTINCT {name: dst.name, type: r1.type, confidence: r1.confidence}) AS outgoing,
+                collect(DISTINCT {name: src.name, type: r2.type, confidence: r2.confidence}) AS incoming
+              LIMIT 1
+            `,
+                { nid: nodeId },
+              ).catch(() => []),
+              executePrepared(
+                `
+              MATCH (n:${nodeLabel} {id: $nid})
+              MATCH (n)-[:CodeRelation {type: 'MEMBER_OF'}]->(c:Community)
+              RETURN c.label AS label, c.description AS description
+              LIMIT 1
+            `,
+                { nid: nodeId },
+              ).catch(() => []),
+              executePrepared(
+                `
+              MATCH (n:${nodeLabel} {id: $nid})
+              MATCH (n)-[rel:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process)
+              RETURN p.id AS id, p.label AS label, rel.step AS step, p.stepCount AS stepCount
+              ORDER BY rel.step
+            `,
+                { nid: nodeId },
+              ).catch(() => []),
+            ]);
+
+            if (connRes.length > 0) {
+              const row = connRes[0];
+              const outgoing = (Array.isArray(row) ? row[0] : row.outgoing || [])
+                .filter((c: any) => c?.name)
+                .slice(0, 5);
+              const incoming = (Array.isArray(row) ? row[1] : row.incoming || [])
+                .filter((c: any) => c?.name)
+                .slice(0, 5);
+              enrichment.connections = { outgoing, incoming };
+            }
+
+            if (clusterRes.length > 0) {
+              const row = clusterRes[0];
+              enrichment.cluster = Array.isArray(row) ? row[0] : row.label;
+            }
+
+            if (procRes.length > 0) {
+              enrichment.processes = procRes
+                .map((row: any) => ({
+                  id: Array.isArray(row) ? row[0] : row.id,
+                  label: Array.isArray(row) ? row[1] : row.label,
+                  step: Array.isArray(row) ? row[2] : row.step,
+                  stepCount: Array.isArray(row) ? row[3] : row.stepCount,
+                }))
+                .filter((p: any) => p.id && p.label);
+            }
+
+            return { ...r, ...enrichment };
+          }),
+        );
+
+        return enriched;
       });
       res.json({ results });
     } catch (err: any) {
@@ -812,14 +991,111 @@ export const createServer = async (
         return;
       }
 
-      const content = await fs.readFile(fullPath, 'utf-8');
-      res.json({ content });
+      const raw = await fs.readFile(fullPath, 'utf-8');
+
+      // Optional line-range support: ?startLine=10&endLine=50
+      // Returns only the requested slice (0-indexed), plus metadata.
+      const startLine = req.query.startLine !== undefined ? Number(req.query.startLine) : undefined;
+      const endLine = req.query.endLine !== undefined ? Number(req.query.endLine) : undefined;
+
+      if (startLine !== undefined && Number.isFinite(startLine)) {
+        const lines = raw.split('\n');
+        const start = Math.max(0, startLine);
+        const end =
+          endLine !== undefined && Number.isFinite(endLine)
+            ? Math.min(lines.length, endLine + 1)
+            : lines.length;
+        res.json({
+          content: lines.slice(start, end).join('\n'),
+          startLine: start,
+          endLine: end - 1,
+          totalLines: lines.length,
+        });
+      } else {
+        res.json({ content: raw, totalLines: raw.split('\n').length });
+      }
     } catch (err: any) {
       if (err.code === 'ENOENT') {
         res.status(404).json({ error: 'File not found' });
       } else {
         res.status(500).json({ error: err.message || 'Failed to read file' });
       }
+    }
+  });
+
+  // Grep — regex search across file contents in the indexed repo
+  // Uses filesystem-based search for memory efficiency (never loads all files into memory)
+  app.get('/api/grep', async (req, res) => {
+    try {
+      const entry = await resolveRepo(requestedRepo(req));
+      if (!entry) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+      const pattern = req.query.pattern as string;
+      if (!pattern) {
+        res.status(400).json({ error: 'Missing "pattern" query parameter' });
+        return;
+      }
+
+      // ReDoS protection: reject overly long or dangerous patterns
+      if (pattern.length > 200) {
+        res.status(400).json({ error: 'Pattern too long (max 200 characters)' });
+        return;
+      }
+
+      // Validate regex syntax
+      let regex: RegExp;
+      try {
+        regex = new RegExp(pattern, 'gim');
+      } catch {
+        res.status(400).json({ error: 'Invalid regex pattern' });
+        return;
+      }
+
+      const parsedLimit = Number(req.query.limit ?? 50);
+      const limit = Number.isFinite(parsedLimit)
+        ? Math.max(1, Math.min(200, Math.trunc(parsedLimit)))
+        : 50;
+
+      const results: { filePath: string; line: number; text: string }[] = [];
+      const repoRoot = path.resolve(entry.path);
+
+      // Get file paths from the graph (lightweight — no content loaded)
+      const lbugPath = path.join(entry.storagePath, 'lbug');
+      const fileRows = await withLbugDb(lbugPath, () =>
+        executeQuery(`MATCH (n:File) WHERE n.content IS NOT NULL RETURN n.filePath AS filePath`),
+      );
+
+      // Search files on disk one at a time (constant memory)
+      for (const row of fileRows) {
+        if (results.length >= limit) break;
+        const filePath: string = row.filePath || '';
+        const fullPath = path.resolve(repoRoot, filePath);
+
+        // Path traversal guard
+        if (!fullPath.startsWith(repoRoot + path.sep) && fullPath !== repoRoot) continue;
+
+        let content: string;
+        try {
+          content = await fs.readFile(fullPath, 'utf-8');
+        } catch {
+          continue; // File may have been deleted since indexing
+        }
+
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (results.length >= limit) break;
+          if (regex.test(lines[i])) {
+            results.push({ filePath, line: i + 1, text: lines[i].trim().slice(0, 200) });
+          }
+          regex.lastIndex = 0;
+        }
+      }
+
+      res.json({ results });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Grep failed' });
     }
   });
 
@@ -849,7 +1125,9 @@ export const createServer = async (
       }
       res.json(result);
     } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message || 'Failed to query process detail' });
+      res
+        .status(statusFromError(err))
+        .json({ error: err.message || 'Failed to query process detail' });
     }
   });
 
@@ -879,66 +1157,420 @@ export const createServer = async (
       }
       res.json(result);
     } catch (err: any) {
-      res.status(statusFromError(err)).json({ error: err.message || 'Failed to query cluster detail' });
+      res
+        .status(statusFromError(err))
+        .json({ error: err.message || 'Failed to query cluster detail' });
     }
   });
 
-  // Git 代理：供 Web 端 Local Git 经本机转发请求，解决跨域/鉴权（仅允许 http/https）
-  const proxyHandler: express.RequestHandler = async (req, res) => {
-    const url = typeof req.query.url === 'string' ? req.query.url : '';
-    if (!url) {
-      res.status(400).json({ error: 'Missing url query parameter' });
-      return;
-    }
-    let parsed: URL;
+  // ── Analyze API ──────────────────────────────────────────────────────
+
+  // POST /api/analyze — start a new analysis job
+  app.post('/api/analyze', async (req, res) => {
     try {
-      parsed = new URL(url);
-    } catch {
-      res.status(400).json({ error: 'Invalid URL' });
-      return;
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      res.status(400).json({ error: 'Only http/https URLs are allowed' });
-      return;
-    }
-    const urlLabel = `${parsed.host}${parsed.pathname.length > 60 ? parsed.pathname.slice(0, 60) + '...' : parsed.pathname}`;
-    const method = req.method || 'GET';
-    console.log(`[proxy] ${method} ${urlLabel} -> 请求中...`);
-    try {
-      const headers: Record<string, string> = {
-        'User-Agent': 'git/isomorphic-git',
-      };
-      if (req.headers.authorization) headers['Authorization'] = req.headers.authorization as string;
-      if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'] as string;
-      if (req.headers['git-protocol']) headers['Git-Protocol'] = req.headers['git-protocol'] as string;
-      if (req.headers.accept) headers['Accept'] = req.headers.accept as string;
+      const { url: repoUrl, path: repoLocalPath, force, embeddings } = req.body;
+      const branchOpt =
+        typeof req.body?.branch === 'string' && req.body.branch.trim().length > 0
+          ? req.body.branch.trim()
+          : undefined;
 
-      const body = req.method === 'POST' && Buffer.isBuffer(req.body) ? req.body : undefined;
-      const response = await fetch(url, {
-        method,
-        headers,
-        body,
-      });
+      // Input type validation
+      if (repoUrl !== undefined && typeof repoUrl !== 'string') {
+        res.status(400).json({ error: '"url" must be a string' });
+        return;
+      }
+      if (repoLocalPath !== undefined && typeof repoLocalPath !== 'string') {
+        res.status(400).json({ error: '"path" must be a string' });
+        return;
+      }
 
-      const buf = await response.arrayBuffer();
-      const size = buf.byteLength;
-      const sizeStr = size >= 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(1)}MB` : size >= 1024 ? `${(size / 1024).toFixed(1)}KB` : `${size}B`;
-      console.log(`[proxy] ${method} ${urlLabel} -> ${response.status} ${sizeStr} (正常拉取)`);
+      if (!repoUrl && !repoLocalPath) {
+        res.status(400).json({ error: 'Provide "url" (git URL) or "path" (local path)' });
+        return;
+      }
 
-      res.setHeader('Access-Control-Expose-Headers', '*');
-      const skip = ['content-encoding', 'transfer-encoding', 'connection', 'www-authenticate'];
-      response.headers.forEach((value, key) => {
-        if (!skip.includes(key.toLowerCase())) res.setHeader(key, value);
-      });
-      res.status(response.status);
-      res.end(Buffer.from(buf));
+      // Path validation: require absolute path, reject traversal (e.g. /tmp/../etc/passwd)
+      if (repoLocalPath) {
+        if (!path.isAbsolute(repoLocalPath)) {
+          res.status(400).json({ error: '"path" must be an absolute path' });
+          return;
+        }
+        if (path.normalize(repoLocalPath) !== path.resolve(repoLocalPath)) {
+          res.status(400).json({ error: '"path" must not contain traversal sequences' });
+          return;
+        }
+      }
+
+      const job = jobManager.createJob({ repoUrl, repoPath: repoLocalPath });
+
+      // If job was already running (dedup), just return its id
+      if (job.status !== 'queued') {
+        res.status(202).json({ jobId: job.id, status: job.status });
+        return;
+      }
+
+      // Mark as active synchronously to prevent race with concurrent requests
+      jobManager.updateJob(job.id, { status: 'cloning' });
+
+      // Start async work — don't await
+      (async () => {
+        let targetPath = repoLocalPath;
+        try {
+          // Clone if URL provided
+          if (repoUrl && !repoLocalPath) {
+            const baseName = extractRepoName(repoUrl);
+            const dirSuffix = branchOpt
+              ? `@@${branchOpt.replace(/[^a-zA-Z0-9_\-]/g, '_')}`
+              : '';
+            const repoName = `${baseName}${dirSuffix}`;
+            targetPath = getCloneDir(repoName);
+
+            jobManager.updateJob(job.id, {
+              status: 'cloning',
+              repoName,
+              progress: { phase: 'cloning', percent: 0, message: `Cloning ${repoUrl}...` },
+            });
+
+            await cloneOrPull(
+              repoUrl,
+              targetPath,
+              (progress) => {
+                jobManager.updateJob(job.id, {
+                  progress: { phase: progress.phase, percent: 5, message: progress.message },
+                });
+              },
+              { branch: branchOpt },
+            );
+          }
+
+          if (!targetPath) {
+            throw new Error('No target path resolved');
+          }
+
+          // Acquire shared repo lock (keyed on storagePath to match embed handler)
+          const analyzeLockKey = getStoragePath(targetPath);
+          const lockErr = acquireRepoLock(analyzeLockKey);
+          if (lockErr) {
+            jobManager.updateJob(job.id, { status: 'failed', error: lockErr });
+            return;
+          }
+
+          jobManager.updateJob(job.id, { repoPath: targetPath, status: 'analyzing' });
+
+          // ── Worker fork with auto-retry ──────────────────────────────
+          //
+          // Forks a child process with 8GB heap. If the worker crashes
+          // (OOM, native addon segfault, etc.), it retries up to
+          // MAX_WORKER_RETRIES times with exponential backoff before
+          // marking the job as permanently failed.
+          //
+          // In dev mode (tsx), registers the tsx ESM hook via a file://
+          // URL so the child can compile TypeScript on-the-fly.
+
+          const MAX_WORKER_RETRIES = 2;
+          const callerPath = fileURLToPath(import.meta.url);
+          const isDev = callerPath.endsWith('.ts');
+          const workerFile = isDev ? 'analyze-worker.ts' : 'analyze-worker.js';
+          const workerPath = path.join(path.dirname(callerPath), workerFile);
+          const tsxHookArgs: string[] = isDev
+            ? ['--import', pathToFileURL(_require.resolve('tsx/esm')).href]
+            : [];
+
+          const forkWorker = () => {
+            const currentJob = jobManager.getJob(job.id);
+            if (!currentJob || currentJob.status === 'complete' || currentJob.status === 'failed')
+              return;
+
+            const child = fork(workerPath, [], {
+              execArgv: [...tsxHookArgs, '--max-old-space-size=8192'],
+              stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+            });
+
+            // Capture stderr for crash diagnostics
+            let stderrChunks = '';
+            child.stderr?.on('data', (chunk: Buffer) => {
+              stderrChunks += chunk.toString();
+              if (stderrChunks.length > 4096) stderrChunks = stderrChunks.slice(-4096);
+            });
+
+            child.on('message', (msg: any) => {
+              if (msg.type === 'progress') {
+                jobManager.updateJob(job.id, {
+                  status: 'analyzing',
+                  progress: { phase: msg.phase, percent: msg.percent, message: msg.message },
+                });
+              } else if (msg.type === 'complete') {
+                releaseRepoLock(analyzeLockKey);
+                // Reinitialize backend BEFORE marking complete — ensures the new
+                // repo is queryable when the client receives the SSE complete event.
+                backend
+                  .init()
+                  .then(() => {
+                    jobManager.updateJob(job.id, {
+                      status: 'complete',
+                      repoName: msg.result.repoName,
+                    });
+                  })
+                  .catch((err) => {
+                    console.error('backend.init() failed after analyze:', err);
+                    jobManager.updateJob(job.id, {
+                      status: 'failed',
+                      error: 'Server failed to reload after analysis. Try again.',
+                    });
+                  });
+              } else if (msg.type === 'error') {
+                releaseRepoLock(analyzeLockKey);
+                jobManager.updateJob(job.id, {
+                  status: 'failed',
+                  error: msg.message,
+                });
+              }
+            });
+
+            child.on('error', (err) => {
+              releaseRepoLock(analyzeLockKey);
+              jobManager.updateJob(job.id, {
+                status: 'failed',
+                error: `Worker process error: ${err.message}`,
+              });
+            });
+
+            child.on('exit', (code) => {
+              const j = jobManager.getJob(job.id);
+              if (!j || j.status === 'complete' || j.status === 'failed') return;
+
+              // Worker crashed — attempt retry if under the limit
+              if (j.retryCount < MAX_WORKER_RETRIES) {
+                j.retryCount++;
+                const delay = 1000 * Math.pow(2, j.retryCount - 1); // 1s, 2s
+                const lastErr = stderrChunks.trim().split('\n').pop() || '';
+                console.warn(
+                  `Analyze worker crashed (code ${code}), retry ${j.retryCount}/${MAX_WORKER_RETRIES} in ${delay}ms` +
+                    (lastErr ? `: ${lastErr}` : ''),
+                );
+                jobManager.updateJob(job.id, {
+                  status: 'analyzing',
+                  progress: {
+                    phase: 'retrying',
+                    percent: j.progress.percent,
+                    message: `Worker crashed, retrying (${j.retryCount}/${MAX_WORKER_RETRIES})...`,
+                  },
+                });
+                stderrChunks = '';
+                setTimeout(forkWorker, delay);
+              } else {
+                // Exhausted retries — permanent failure
+                releaseRepoLock(analyzeLockKey);
+                jobManager.updateJob(job.id, {
+                  status: 'failed',
+                  error: `Worker crashed ${MAX_WORKER_RETRIES + 1} times (code ${code})${stderrChunks ? ': ' + stderrChunks.trim().split('\n').pop() : ''}`,
+                });
+              }
+            });
+
+            // Register child for cancellation + timeout tracking
+            jobManager.registerChild(job.id, child);
+
+            // Send start command to child
+            child.send({
+              type: 'start',
+              repoPath: targetPath,
+              options: { force: !!force, embeddings: !!embeddings },
+            });
+          };
+
+          forkWorker();
+        } catch (err: any) {
+          if (targetPath) releaseRepoLock(getStoragePath(targetPath));
+          jobManager.updateJob(job.id, {
+            status: 'failed',
+            error: err.message || 'Analysis failed',
+          });
+        }
+      })();
+
+      res.status(202).json({ jobId: job.id, status: job.status });
     } catch (err: any) {
-      console.error(`[proxy] ${method} ${urlLabel} -> 失败:`, err?.message || err);
-      res.status(500).json({ error: 'Proxy request failed', details: err?.message || String(err) });
+      if (err.message?.includes('already in progress')) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(500).json({ error: err.message || 'Failed to start analysis' });
+      }
     }
-  };
-  app.get('/api/proxy', proxyHandler);
-  app.post('/api/proxy', express.raw({ type: '*/*', limit: '50mb' }), proxyHandler);
+  });
+
+  // GET /api/analyze/:jobId — poll job status
+  app.get('/api/analyze/:jobId', (req, res) => {
+    const job = jobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    res.json({
+      id: job.id,
+      status: job.status,
+      repoUrl: job.repoUrl,
+      repoPath: job.repoPath,
+      repoName: job.repoName,
+      progress: job.progress,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    });
+  });
+
+  // GET /api/analyze/:jobId/progress — SSE stream (shared helper)
+  mountSSEProgress(app, '/api/analyze/:jobId/progress', jobManager);
+
+  // DELETE /api/analyze/:jobId — cancel a running analysis job
+  app.delete('/api/analyze/:jobId', (req, res) => {
+    const job = jobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    if (job.status === 'complete' || job.status === 'failed') {
+      res.status(400).json({ error: `Job already ${job.status}` });
+      return;
+    }
+    jobManager.cancelJob(req.params.jobId, 'Cancelled by user');
+    res.json({ id: job.id, status: 'failed', error: 'Cancelled by user' });
+  });
+
+  // ── Embedding endpoints ────────────────────────────────────────────
+
+  const embedJobManager = new JobManager();
+
+  // POST /api/embed — trigger server-side embedding generation
+  app.post('/api/embed', async (req, res) => {
+    try {
+      const entry = await resolveRepo(requestedRepo(req));
+      if (!entry) {
+        res.status(404).json({ error: 'Repository not found' });
+        return;
+      }
+
+      // Check shared repo lock — prevent concurrent analyze + embed on same repo
+      const repoLockPath = entry.storagePath;
+      const lockErr = acquireRepoLock(repoLockPath);
+      if (lockErr) {
+        res.status(409).json({ error: lockErr });
+        return;
+      }
+
+      const job = embedJobManager.createJob({ repoPath: entry.storagePath });
+      embedJobManager.updateJob(job.id, {
+        repoName: entry.name,
+        status: 'analyzing' as any,
+        progress: { phase: 'analyzing', percent: 0, message: 'Starting embedding generation...' },
+      });
+
+      // 30-minute timeout for embedding jobs (same as analyze jobs)
+      const EMBED_TIMEOUT_MS = 30 * 60 * 1000;
+      const embedTimeout = setTimeout(() => {
+        const current = embedJobManager.getJob(job.id);
+        if (current && current.status !== 'complete' && current.status !== 'failed') {
+          releaseRepoLock(repoLockPath);
+          embedJobManager.updateJob(job.id, {
+            status: 'failed',
+            error: 'Embedding timed out (30 minute limit)',
+          });
+        }
+      }, EMBED_TIMEOUT_MS);
+
+      // Run embedding pipeline asynchronously
+      (async () => {
+        try {
+          const lbugPath = path.join(entry.storagePath, 'lbug');
+          await withLbugDb(lbugPath, async () => {
+            const { runEmbeddingPipeline } =
+              await import('../core/embeddings/embedding-pipeline.js');
+            await runEmbeddingPipeline(executeQuery, executeWithReusedStatement, (p) => {
+              embedJobManager.updateJob(job.id, {
+                progress: {
+                  phase:
+                    p.phase === 'ready' ? 'complete' : p.phase === 'error' ? 'failed' : p.phase,
+                  percent: p.percent,
+                  message:
+                    p.phase === 'loading-model'
+                      ? 'Loading embedding model...'
+                      : p.phase === 'embedding'
+                        ? `Embedding nodes (${p.percent}%)...`
+                        : p.phase === 'indexing'
+                          ? 'Creating vector index...'
+                          : p.phase === 'ready'
+                            ? 'Embeddings complete'
+                            : `${p.phase} (${p.percent}%)`,
+                },
+              });
+            });
+          });
+
+          clearTimeout(embedTimeout);
+          releaseRepoLock(repoLockPath);
+          // Don't overwrite 'failed' if the job was cancelled while the pipeline was running
+          const current = embedJobManager.getJob(job.id);
+          if (!current || current.status !== 'failed') {
+            embedJobManager.updateJob(job.id, { status: 'complete' });
+          }
+        } catch (err: any) {
+          clearTimeout(embedTimeout);
+          releaseRepoLock(repoLockPath);
+          const current = embedJobManager.getJob(job.id);
+          if (!current || current.status !== 'failed') {
+            embedJobManager.updateJob(job.id, {
+              status: 'failed',
+              error: err.message || 'Embedding generation failed',
+            });
+          }
+        }
+      })();
+
+      res.status(202).json({ jobId: job.id, status: 'analyzing' });
+    } catch (err: any) {
+      if (err.message?.includes('already in progress')) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(500).json({ error: err.message || 'Failed to start embedding generation' });
+      }
+    }
+  });
+
+  // GET /api/embed/:jobId — poll embedding job status
+  app.get('/api/embed/:jobId', (req, res) => {
+    const job = embedJobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    res.json({
+      id: job.id,
+      status: job.status,
+      repoName: job.repoName,
+      progress: job.progress,
+      error: job.error,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    });
+  });
+
+  // GET /api/embed/:jobId/progress — SSE stream (shared helper)
+  mountSSEProgress(app, '/api/embed/:jobId/progress', embedJobManager);
+
+  // DELETE /api/embed/:jobId — cancel embedding job
+  app.delete('/api/embed/:jobId', (req, res) => {
+    const job = embedJobManager.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: 'Job not found' });
+      return;
+    }
+    if (job.status === 'complete' || job.status === 'failed') {
+      res.status(400).json({ error: `Job already ${job.status}` });
+      return;
+    }
+    embedJobManager.cancelJob(req.params.jobId, 'Cancelled by user');
+    res.json({ id: job.id, status: 'failed', error: 'Cancelled by user' });
+  });
 
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -946,27 +1578,28 @@ export const createServer = async (
     res.status(500).json({ error: 'Internal server error' });
   });
 
-  const server = app.listen(port, host, () => {
-    console.log(`GitNexus server running on http://${host}:${port}`);
-  });
-
-  if (opts?.nightlyRefresh) {
-    const { hour, minute } = parseNightlyAt(opts.nightlyAt);
-    startNightlyRefreshScheduler(backend, {
-      hour,
-      minute,
-      embeddings: !!enableEmbeddings,
+  // Wrap listen in a promise so errors (EADDRINUSE, EACCES, etc.) propagate
+  // to the caller instead of crashing with an unhandled 'error' event.
+  await new Promise<void>((resolve, reject) => {
+    const server = app.listen(port, host, () => {
+      const displayHost = host === '::' || host === '0.0.0.0' ? 'localhost' : host;
+      console.log(`GitNexus server running on http://${displayHost}:${port}`);
+      resolve();
     });
-  }
+    server.on('error', (err) => reject(err));
 
-  // Graceful shutdown — close Express + LadybugDB cleanly
-  const shutdown = async () => {
-    server.close();
-    await cleanupMcp();
-    await closeLbug();
-    await backend.disconnect();
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+    // Graceful shutdown — close Express + LadybugDB cleanly
+    const shutdown = async () => {
+      console.log('\nShutting down...');
+      server.close();
+      jobManager.dispose();
+      embedJobManager.dispose();
+      await cleanupMcp();
+      await closeLbug();
+      await backend.disconnect();
+      process.exit(0);
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
 };

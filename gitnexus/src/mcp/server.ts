@@ -24,6 +24,7 @@ import {
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { GITNEXUS_TOOLS } from './tools.js';
+import { realStdoutWrite } from './core/lbug-adapter.js';
 import type { LocalBackend } from './local/local-backend.js';
 import { getResourceDefinitions, getResourceTemplates, readResource } from './resources.js';
 
@@ -94,14 +95,14 @@ export function createMCPServer(backend: LocalBackend): Server {
         resources: {},
         prompts: {},
       },
-    }
+    },
   );
 
   // Handle list resources request
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const resources = getResourceDefinitions();
     return {
-      resources: resources.map(r => ({
+      resources: resources.map((r) => ({
         uri: r.uri,
         name: r.name,
         description: r.description,
@@ -114,7 +115,7 @@ export function createMCPServer(backend: LocalBackend): Server {
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
     const templates = getResourceTemplates();
     return {
-      resourceTemplates: templates.map(t => ({
+      resourceTemplates: templates.map((t) => ({
         uriTemplate: t.uriTemplate,
         name: t.name,
         description: t.description,
@@ -150,7 +151,6 @@ export function createMCPServer(backend: LocalBackend): Server {
       };
     }
   });
-
 
   // Handle list tools request
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -197,17 +197,27 @@ export function createMCPServer(backend: LocalBackend): Server {
     prompts: [
       {
         name: 'detect_impact',
-        description: 'Analyze the impact of your current changes before committing. Guides through scope selection, change detection, process analysis, and risk assessment.',
+        description:
+          'Analyze the impact of your current changes before committing. Guides through scope selection, change detection, process analysis, and risk assessment.',
         arguments: [
-          { name: 'scope', description: 'What to analyze: unstaged, staged, all, or compare', required: false },
+          {
+            name: 'scope',
+            description: 'What to analyze: unstaged, staged, all, or compare',
+            required: false,
+          },
           { name: 'base_ref', description: 'Branch/commit for compare scope', required: false },
         ],
       },
       {
         name: 'generate_map',
-        description: 'Generate architecture documentation from the knowledge graph. Creates a codebase overview with execution flows and mermaid diagrams.',
+        description:
+          'Generate architecture documentation from the knowledge graph. Creates a codebase overview with execution flows and mermaid diagrams.',
         arguments: [
-          { name: 'repo', description: 'Repository name (omit if only one indexed)', required: false },
+          {
+            name: 'repo',
+            description: 'Repository name (omit if only one indexed)',
+            required: false,
+          },
         ],
       },
     ],
@@ -276,23 +286,48 @@ Follow these steps:
 export async function startMCPServer(backend: LocalBackend): Promise<void> {
   const server = createMCPServer(backend);
 
-  // Connect to stdio transport
-  const transport = new CompatibleStdioServerTransport();
+  // Use the shared stdout reference captured at module-load time by the
+  // lbug-adapter.  Avoids divergence if anything patches stdout between
+  // module load and server start.
+  const _safeStdout = new Proxy(process.stdout, {
+    get(target, prop, receiver) {
+      if (prop === 'write') return realStdoutWrite;
+      const val = Reflect.get(target, prop, receiver);
+      return typeof val === 'function' ? val.bind(target) : val;
+    },
+  });
+  const transport = new CompatibleStdioServerTransport(process.stdin, _safeStdout);
   await server.connect(transport);
 
   // Graceful shutdown helper
   let shuttingDown = false;
-  const shutdown = async () => {
+  const shutdown = async (exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    try { await backend.disconnect(); } catch {}
-    try { await server.close(); } catch {}
-    process.exit(0);
+    try {
+      await backend.disconnect();
+    } catch {}
+    try {
+      await server.close();
+    } catch {}
+    process.exit(exitCode);
   };
 
   // Handle graceful shutdown
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // Log crashes to stderr so they aren't silently lost.
+  // uncaughtException is fatal — shut down.
+  // unhandledRejection is logged but kept non-fatal (availability-first):
+  // killing the server for one missed catch would be worse than logging it.
+  process.on('uncaughtException', (err) => {
+    process.stderr.write(`GitNexus MCP uncaughtException: ${err?.stack || err}\n`);
+    shutdown(1);
+  });
+  process.on('unhandledRejection', (reason: any) => {
+    process.stderr.write(`GitNexus MCP unhandledRejection: ${reason?.stack || reason}\n`);
+  });
 
   // Handle stdio errors — stdin close means the parent process is gone
   process.stdin.on('end', shutdown);

@@ -2,7 +2,7 @@
 
 **Graph-powered code intelligence for AI agents.** Index any codebase into a knowledge graph, then query it via MCP or CLI.
 
-Works with **Cursor**, **Claude Code**, **Windsurf**, **Cline**, **OpenCode**, and any MCP-compatible tool.
+Works with **Cursor**, **Claude Code**, **Codex**, **Windsurf**, **Cline**, **OpenCode**, and any MCP-compatible tool.
 
 [![npm version](https://img.shields.io/npm/v/gitnexus.svg)](https://www.npmjs.com/package/gitnexus)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
@@ -34,6 +34,7 @@ To configure MCP for your editor, run `npx gitnexus setup` once — or set it up
 |--------|-----|--------|---------------------|---------|
 | **Claude Code** | Yes | Yes | Yes (PreToolUse) | **Full** |
 | **Cursor** | Yes | Yes | — | MCP + Skills |
+| **Codex** | Yes | Yes | — | MCP + Skills |
 | **Windsurf** | Yes | — | — | MCP |
 | **OpenCode** | Yes | Yes | — | MCP + Skills |
 
@@ -52,7 +53,17 @@ If you prefer to configure manually instead of using `gitnexus setup`:
 ### Claude Code (full support — MCP + skills + hooks)
 
 ```bash
+# macOS / Linux
 claude mcp add gitnexus -- npx -y gitnexus@latest mcp
+
+# Windows
+claude mcp add gitnexus -- cmd /c npx -y gitnexus@latest mcp
+```
+
+### Codex (full support — MCP + skills)
+
+```bash
+codex mcp add gitnexus -- npx -y gitnexus@latest mcp
 ```
 
 ### Cursor / Windsurf
@@ -92,6 +103,8 @@ GitNexus builds a complete knowledge graph of your codebase through a multi-phas
 1. **Structure** — Walks the file tree and maps folder/file relationships
 2. **Parsing** — Extracts functions, classes, methods, and interfaces using Tree-sitter ASTs
 3. **Resolution** — Resolves imports and function calls across files with language-aware logic
+   - **Field & Property Type Resolution** — Tracks field types across classes and interfaces for deep chain resolution (e.g., `user.address.city.getName()`)
+   - **Return-Type-Aware Variable Binding** — Infers variable types from function return types, enabling accurate call-result binding
 4. **Clustering** — Groups related symbols into functional communities
 5. **Processes** — Traces execution flows from entry points through call chains
 6. **Search** — Builds hybrid search indexes for fast retrieval
@@ -136,20 +149,46 @@ Your AI agent gets these tools automatically:
 ## CLI Commands
 
 ```bash
-gitnexus setup                    # Configure MCP for your editors (one-time)
-gitnexus analyze [path]           # Index a repository (or update stale index)
-gitnexus analyze --force          # Force full re-index
-gitnexus analyze --embeddings     # Enable embedding generation (slower, better search)
-gitnexus analyze --verbose        # Log skipped files when parsers are unavailable
+gitnexus setup                   # Configure MCP for your editors (one-time)
+gitnexus analyze [path]          # Index a repository (or update stale index)
+gitnexus analyze --force         # Force full re-index
+gitnexus analyze --embeddings    # Enable embedding generation (slower, better search)
+gitnexus analyze --skip-agents-md  # Preserve custom AGENTS.md/CLAUDE.md gitnexus section edits
+gitnexus analyze --verbose       # Log skipped files when parsers are unavailable
 gitnexus mcp                     # Start MCP server (stdio) — serves all indexed repos
 gitnexus serve                   # Start local HTTP server (multi-repo) for web UI
+gitnexus index                   # Register an existing .gitnexus/ folder into the global registry
 gitnexus list                    # List all indexed repositories
 gitnexus status                  # Show index status for current repo
 gitnexus clean                   # Delete index for current repo
 gitnexus clean --all --force     # Delete all indexes
 gitnexus wiki [path]             # Generate LLM-powered docs from knowledge graph
 gitnexus wiki --model <model>    # Wiki with custom LLM model (default: gpt-4o-mini)
+
+# Repository groups (multi-repo / monorepo service tracking)
+gitnexus group create <name>     # Create a repository group
+gitnexus group add <name> <repo> # Add a repo to a group
+gitnexus group remove <name> <repo> # Remove a repo from a group
+gitnexus group list [name]       # List groups, or show one group's config
+gitnexus group sync <name>       # Extract contracts and match across repos/services
+gitnexus group contracts <name>  # Inspect extracted contracts and cross-links
+gitnexus group query <name> <q>  # Search execution flows across all repos in a group
+gitnexus group status <name>     # Check staleness of repos in a group
 ```
+
+## Remote Embeddings
+
+Set these env vars to use a remote OpenAI-compatible `/v1/embeddings` endpoint instead of the local model:
+
+```bash
+export GITNEXUS_EMBEDDING_URL=http://your-server:8080/v1
+export GITNEXUS_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+export GITNEXUS_EMBEDDING_DIMS=1024          # optional, default 384
+export GITNEXUS_EMBEDDING_API_KEY=your-key   # optional, default: "unused"
+gitnexus analyze . --embeddings
+```
+
+Works with Infinity, vLLM, TEI, llama.cpp, Ollama, LM Studio, or OpenAI. When unset, local embeddings are used unchanged.
 
 ## Multi-Repo Support
 
@@ -194,6 +233,56 @@ Installed automatically by both `gitnexus analyze` (per-repo) and `gitnexus setu
 
 - Node.js >= 18
 - Git repository (uses git for commit tracking)
+
+## Troubleshooting
+
+### `Cannot destructure property 'package' of 'node.target' as it is null`
+
+This crash was caused by a dependency URL format that is incompatible with
+certain npm/arborist versions ([npm/cli#8126](https://github.com/npm/cli/issues/8126)).
+It is fixed in **gitnexus v1.6.2+**. Upgrade to the latest version:
+
+```bash
+npx gitnexus@latest analyze          # always uses the newest release
+# — or —
+npm install -g gitnexus@latest       # upgrade a global install
+```
+
+If you still hit npm install issues after upgrading, these generic workarounds
+may help:
+
+```bash
+npm install -g npm@latest            # update npm itself
+npm cache clean --force              # clear a possibly corrupt cache
+```
+
+### Installation fails with native module errors
+
+Some optional language grammars (Dart, Kotlin, Swift) require native compilation. If they fail, GitNexus still works — those languages will be skipped.
+
+If `npm install -g gitnexus` fails on native modules:
+
+```bash
+# Ensure build tools are available (Linux/macOS)
+# Ubuntu/Debian: sudo apt install python3 make g++
+# macOS: xcode-select --install
+
+# Retry installation
+npm install -g gitnexus
+```
+
+### Analysis runs out of memory
+
+For very large repositories:
+
+```bash
+# Increase Node.js heap size
+NODE_OPTIONS="--max-old-space-size=16384" npx gitnexus analyze
+
+# Exclude large directories
+echo "vendor/" >> .gitnexusignore
+echo "dist/" >> .gitnexusignore
+```
 
 ## Privacy
 

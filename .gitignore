@@ -33,6 +33,8 @@ coverage/
 
 # Misc
 *.local
+HANDOFF.md
+HANDOFF*.md
 
 .vercel
 
@@ -48,11 +50,49 @@ coverage/
 # Claude Code worktrees
 .claude/worktrees/
 
+# Claude code skills
+.claude/skills/generated/
+
 # Assets (screenshots, images)
 assets/
 
 # Generated files (should not be indexed)
 repomix-output*
 
+# Playwright artifacts
+gitnexus-web/playwright-report/
+gitnexus-web/test-results/
+
+# Python test artifacts
+eval/.coverage
+eval/.hypothesis/
+
 # Design docs (local only)
 docs/plans/
+
+gitnexus/test/fixtures/mini-repo/*.md
+gitnexus/test/fixtures/mini-repo/.claude
+gitnexus/test/fixtures/mini-repo/.gitignore
+
+# Ignore csharp generated obj and bin folders
+gitnexus/test/fixtures/lang-resolution/**/obj
+gitnexus/test/fixtures/lang-resolution/**/bin
+GitNexus.sln
+# Git worktrees
+.worktrees/
+
+/github/scripts/triage/__pycache__/
+
+.claude-flow/
+
+.claude/agents/
+.claude/commands/
+.claude/helpers
+.claude/skills/
+!.claude/skills/gitnexus/
+
+.history/
+
+.swarm/
+
+local_docs/

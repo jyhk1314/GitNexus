@@ -1,5 +1,4 @@
-import { X } from 'lucide-react';
-import { PipelineProgress } from '../types/pipeline';
+import type { PipelineProgress } from 'gitnexus-shared';
 
 interface LoadingOverlayProps {
   progress: PipelineProgress;
@@ -9,24 +8,24 @@ interface LoadingOverlayProps {
 
 export const LoadingOverlay = ({ progress, onCancel }: LoadingOverlayProps) => {
   return (
-    <div className="fixed inset-0 flex flex-col items-center justify-center bg-void z-50">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-void">
       {/* Background gradient effects */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/3 left-1/3 w-96 h-96 bg-accent/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-1/3 right-1/3 w-96 h-96 bg-node-interface/10 rounded-full blur-3xl animate-pulse" />
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute top-1/3 left-1/3 h-96 w-96 animate-pulse rounded-full bg-accent/10 blur-3xl" />
+        <div className="absolute right-1/3 bottom-1/3 h-96 w-96 animate-pulse rounded-full bg-node-interface/10 blur-3xl" />
       </div>
 
       {/* Pulsing orb */}
       <div className="relative mb-10">
-        <div className="w-28 h-28 bg-gradient-to-br from-accent to-node-interface rounded-full animate-pulse-glow" />
-        <div className="absolute inset-0 w-28 h-28 bg-gradient-to-br from-accent to-node-interface rounded-full blur-xl opacity-50" />
+        <div className="h-28 w-28 animate-pulse-glow rounded-full bg-gradient-to-br from-accent to-node-interface" />
+        <div className="absolute inset-0 h-28 w-28 rounded-full bg-gradient-to-br from-accent to-node-interface opacity-50 blur-xl" />
       </div>
 
       {/* Progress bar */}
-      <div className="w-80 mb-4">
-        <div className="h-1.5 bg-elevated rounded-full overflow-hidden">
-          <div 
-            className="h-full bg-gradient-to-r from-accent to-node-interface rounded-full transition-all duration-300 ease-out"
+      <div className="mb-4 w-80">
+        <div className="h-1.5 overflow-hidden rounded-full bg-elevated">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-accent to-node-interface transition-all duration-300 ease-out"
             style={{ width: `${progress.percent}%` }}
           />
         </div>
@@ -34,14 +33,12 @@ export const LoadingOverlay = ({ progress, onCancel }: LoadingOverlayProps) => {
 
       {/* Status text */}
       <div className="text-center">
-        <p className="font-mono text-sm text-text-secondary mb-1">
+        <p className="mb-1 font-mono text-sm text-text-secondary">
           {progress.message}
           <span className="animate-pulse">|</span>
         </p>
         {progress.detail && (
-          <p className="font-mono text-xs text-text-muted truncate max-w-md">
-            {progress.detail}
-          </p>
+          <p className="max-w-md truncate font-mono text-xs text-text-muted">{progress.detail}</p>
         )}
       </div>
 
@@ -49,32 +46,20 @@ export const LoadingOverlay = ({ progress, onCancel }: LoadingOverlayProps) => {
       {progress.stats && (
         <div className="mt-8 flex items-center gap-6 text-xs text-text-muted">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-node-file rounded-full" />
-            <span>{progress.stats.filesProcessed} / {progress.stats.totalFiles} files</span>
+            <span className="h-2 w-2 rounded-full bg-node-file" />
+            <span>
+              {progress.stats.filesProcessed} / {progress.stats.totalFiles} files
+            </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-node-function rounded-full" />
+            <span className="h-2 w-2 rounded-full bg-node-function" />
             <span>{progress.stats.nodesCreated} nodes</span>
           </div>
         </div>
       )}
 
       {/* Percent */}
-      <p className="mt-4 font-mono text-3xl font-semibold text-text-primary">
-        {progress.percent}%
-      </p>
-
-      {onCancel && progress.phase !== 'error' && (
-        <button
-          type="button"
-          onClick={onCancel}
-          className="mt-8 flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium text-text-secondary bg-elevated border border-border-default hover:bg-elevated/80 hover:text-text-primary transition-colors"
-        >
-          <X className="w-4 h-4" />
-          取消
-        </button>
-      )}
+      <p className="mt-4 font-mono text-3xl font-semibold text-text-primary">{progress.percent}%</p>
     </div>
   );
 };
-
