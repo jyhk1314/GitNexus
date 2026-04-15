@@ -13,26 +13,31 @@
 | 字段 | 值 |
 |------|-----|
 | **记录日期** | 2026-04-15 |
-| **本仓库 `HEAD`** | `bea1e6b4589066f2517f1620b3c9ca7ad049721b` |
-| **与 `upstream/main` 的最近公共祖先（对齐点）** | `9ad1984b17e4c53f7e3085226f0e4ce17ad9354b` |
-| **对齐点在一句话** | `fix: resolve C/C++ cross-file calls through transitive #include chains (#816)` |
-| **对齐点 `git describe`（在官方仓库上）** | `v1.6.1-6-g9ad1984`（基于 `v1.6.1` 的 describe，**非**单独打在 `9ad1984` 上的 release tag） |
-| **当时本地官方克隆 `D:\github\GitNexus` 的 `main` tip** | `c100577e5ed3802c89b3c04fb9b6cbe439ea1f84`（`fix(embeddings): … (#823)`） |
-| **该 tip 的 RC tag（官方仓库）** | `rc/c100577e5ed3802c89b3c04fb9b6cbe439ea1f84` |
+| **本仓库 `HEAD`** | `3500c26ecbace0187f971f57b13a81ba4812f106`（merge: `upstream/main` 至 `385ee03`） |
+| **与 `upstream/main` 的最近公共祖先（对齐点）** | `385ee037bd23a96849588686471dc9c991dd93cb` |
+| **对齐点在一句话** | `[group/sync] Fix ManifestExtractor never called — config.links always produced 0 cross-links (#827)` |
+| **对齐点 `git describe`（在官方仓库上）** | `rc/385ee037bd23a96849588686471dc9c991dd93cb` |
+| **本次自上游合入的提交范围（供审计）** | `28ddbe5d5439352b30f51eadac76bc10c7e7208f`（含）~ `385ee03`：#818 CSV 流式 drain、#823 embeddings、#825 RC CI、#827 manifest sync、#832 Windows `splitRelCsv` 等 |
+| **当时本地官方克隆 `D:\github\GitNexus` 的 `main` tip（可选对照）** | 与 **对齐点** 一致时应为 `385ee03` |
 
-含义：**对齐点 `9ad1984`** 是「本 fork 与官方 `main` 历史仍重合」的最后提交；官方在此之后还有新提交（例如 `c100577`），本仓库尚未以 `main` 快进到同一 tip。
+含义：**对齐点 `385ee03`** 即当前 `upstream/main` tip；本 fork 已与该 tip 历史对齐，下次对比请从 `385ee03` 之后的新提交算起。
+
+#### 本次合入时保留的 fork 行为（勿被后续覆盖）
+
+- **`gitnexus/src/core/lbug/lbug-adapter.ts`**：采用上游 `splitRelCsvByLabelPair`（`for await` + `finished` + #832），并**保留** `closeLbugForPath` 与 `import { evictPoolsForDbPath } from './pool-adapter.js'`（Local Git / nightly 释放句柄）。
+- **`gitnexus/src/server/nightly-refresh.ts`**：`evictPoolsForDbPath` 自 **`../core/lbug/pool-adapter.js`** 导入（非 `mcp/...`）。
 
 ### 下次如何对比（在 `GitNexus_jyhk` 根目录）
 
 ```powershell
 git fetch upstream
-# 重新计算对齐点（若合入过上游，会变）
+# 重新计算对齐点（合入上游后应与 upstream/main tip 一致）
 git merge-base HEAD upstream/main
-# 官方从「上次对齐点」到现在多了什么
-git log --oneline 9ad1984b17e4c53f7e3085226f0e4ce17ad9354b..upstream/main
-git diff --stat 9ad1984b17e4c53f7e3085226f0e4ce17ad9354b..upstream/main
-# 本 fork 从对齐点起多了什么（功能清单用）
-git log --oneline 9ad1984b17e4c53f7e3085226f0e4ce17ad9354b..HEAD
+# 官方从「上次对齐点」到现在多了什么（将 OLD 换为上一版 DIFF 中的对齐点 SHA）
+git log --oneline 385ee037bd23a96849588686471dc9c991dd93cb..upstream/main
+git diff --stat 385ee037bd23a96849588686471dc9c991dd93cb..upstream/main
+# 本 fork 相对对齐点多出的提交（功能清单用）
+git log --oneline 385ee037bd23a96849588686471dc9c991dd93cb..HEAD
 ```
 
 独立克隆、仅有两份工作区时，可在 **官方仓库** 目录执行 `git fetch origin` 后，用同一 **对齐点 SHA** 与 **官方 `origin/main` 的 SHA** 做 `git diff <对齐点>..<官方main>`，结果应与上表「官方多出来的提交」一致。
@@ -61,7 +66,7 @@ git log --oneline 9ad1984b17e4c53f7e3085226f0e4ce17ad9354b..HEAD
 
 ## 二、路径索引（相对上游对齐点的 fork 功能增量）
 
-下列为 **本仓库相对对齐点 `9ad1984`** 已出现、且与上游 `main`（截至记录日）对比时仍体现为差异的主要路径或主题；合入上游新提交时请优先对照本节与 `docs/` 专题。
+下列为 **本仓库相对上游仍属 fork 增量** 的主要路径或主题（对齐点已随官方更新，见上文「零」）；合入上游新提交时请优先对照本节与 `docs/` 专题。
 
 | 路径 / 主题 | 要点 |
 |-------------|------|
@@ -69,6 +74,7 @@ git log --oneline 9ad1984b17e4c53f7e3085226f0e4ce17ad9354b..HEAD
 | `gitnexus/src/core/ingestion/cpp-export-macro-preprocess.ts` | C/C++ 解析前对导出宏等预处理；由 `parse-worker` 接入。 |
 | `gitnexus/src/core/ingestion/gitnexus-filter.ts` + `process-processor.ts` | 进程级过滤配置（与 pipeline `processes` 衔接）。 |
 | `gitnexus/src/core/ingestion/pipeline-phases/cross-file.ts` | 与跨文件解析相关的少量 fork 调整（对照上游合并时需注意）。 |
+| `gitnexus/src/core/lbug/lbug-adapter.ts` | 与上游一致的 `splitRelCsvByLabelPair` 等；**另含 fork**：`closeLbugForPath`、`evictPoolsForDbPath`（见「零」合入说明）。 |
 | `gitnexus/src/server/local-git-routes.ts` | Local Git HTTP API（大块新增）。 |
 | `gitnexus/src/server/api.ts`、`git-clone.ts`、`mcp-http.ts` | 与 clone-analyze、分支目录名、MCP 等一致化修改。 |
 | `gitnexus/src/server/nightly-refresh.ts`、`git-nightly-sync.ts`、`maintenance/repo-maintenance.ts` | 夜间刷新与仓库维护状态。 |
@@ -82,7 +88,7 @@ git log --oneline 9ad1984b17e4c53f7e3085226f0e4ce17ad9354b..HEAD
 
 ### 与上游仓库布局的差异（非功能时可略）
 
-- 本 fork 可能 **不包含** 上游部分 CI（例如 `.github/workflows/release-candidate.yml`）或个别根目录文档；合入时以官方为准或按团队策略恢复，**不必**记入本表除非影响发布语义。
+- CI：若需与官方一致，可保留 `.github/workflows/release-candidate.yml`（来自上游 #825）；纯 fork 部署不需要时可再移除。
 
 ---
 
