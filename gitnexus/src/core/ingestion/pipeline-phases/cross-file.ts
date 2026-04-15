@@ -34,6 +34,7 @@ import type { PipelinePhase, PipelineContext, PhaseResult } from './types.js';
 import { getPhaseOutput } from './types.js';
 import type { ParseOutput } from './parse.js';
 import { runCrossFileBindingPropagation } from './cross-file-impl.js';
+import { enrichCppCallsTargetsFromSiblingClassScope } from '../call-processor.js';
 import { isDev } from '../utils/env.js';
 
 export interface CrossFileOutput {
@@ -79,6 +80,8 @@ export const crossFilePhase: PipelinePhase<CrossFileOutput> = {
         ctx.pipelineStart,
         ctx.onProgress,
       );
+
+      enrichCppCallsTargetsFromSiblingClassScope(ctx.graph);
 
       return { filesReprocessed };
     } finally {

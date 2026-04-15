@@ -68,6 +68,7 @@ import type { ConstructorBinding } from '../type-env.js';
 import { detectFrameworkFromAST } from '../framework-detection.js';
 import { generateId } from '../../../lib/utils.js';
 import { preprocessImportPath } from '../import-processor.js';
+import { preprocessCppExportMacros } from '../cpp-export-macro-preprocess.js';
 import {
   extractVueScript,
   extractTemplateComponents,
@@ -1375,6 +1376,11 @@ const processFileGroup = (
       parseContent = extracted.scriptContent;
       lineOffset = extracted.lineOffset;
       isVueSetup = extracted.isSetup;
+    } else if (
+      language === SupportedLanguages.CPlusPlus ||
+      language === SupportedLanguages.C
+    ) {
+      parseContent = preprocessCppExportMacros(parseContent);
     }
 
     clearCaches(); // Reset memoization before each new file

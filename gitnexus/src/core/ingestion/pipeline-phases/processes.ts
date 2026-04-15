@@ -16,6 +16,7 @@ import type { RoutesOutput } from './routes.js';
 import type { ToolsOutput } from './tools.js';
 import type { StructureOutput } from './structure.js';
 import { processProcesses, type ProcessDetectionResult } from '../process-processor.js';
+import { loadGitNexusFilter } from '../gitnexus-filter.js';
 import { generateId } from '../../../lib/utils.js';
 import { isDev } from '../utils/env.js';
 
@@ -51,6 +52,8 @@ export const processesPhase: PipelinePhase<ProcessesOutput> = {
     });
     const dynamicMaxProcesses = Math.max(20, Math.min(300, Math.round(symbolCount / 10)));
 
+    const processFilter = loadGitNexusFilter(ctx.repoPath);
+
     const processResult = await processProcesses(
       ctx.graph,
       communityResult.memberships,
@@ -64,6 +67,7 @@ export const processesPhase: PipelinePhase<ProcessesOutput> = {
         });
       },
       { maxProcesses: dynamicMaxProcesses, minSteps: 3 },
+      processFilter,
     );
 
     if (isDev) {

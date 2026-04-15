@@ -16,6 +16,13 @@ import { CommunityMembership } from './community-processor.js';
 import { calculateEntryPointScore, isTestFile } from './entry-point-scoring.js';
 import { SupportedLanguages } from 'gitnexus-shared';
 import { isDev } from './utils/env.js';
+import {
+  type ProcessFilterConfig,
+  filePathMatchesProcessFilter,
+  classNameMatchesProcessFilter,
+} from './gitnexus-filter.js';
+
+export type { ProcessFilterConfig } from './gitnexus-filter.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -82,6 +89,7 @@ export const processProcesses = async (
   memberships: CommunityMembership[],
   onProgress?: (message: string, progress: number) => void,
   config: Partial<ProcessDetectionConfig> = {},
+  processFilter?: ProcessFilterConfig,
 ): Promise<ProcessDetectionResult> => {
   const cfg = { ...DEFAULT_CONFIG, ...config };
 
@@ -96,10 +104,16 @@ export const processProcesses = async (
   const nodeMap = new Map<string, GraphNode>();
   for (const n of knowledgeGraph.iterNodes()) nodeMap.set(n.id, n);
 
-  // Step 1: Find entry points (functions that call others but have few callers)
-  const entryPoints = findEntryPoints(knowledgeGraph, reverseCallsEdges, callsEdges);
+  const methodClassMap = buildMethodToClassNameMap(knowledgeGraph);
 
-  onProgress?.(`Found ${entryPoints.length} entry points, tracing flows...`, 20);
+  // Step 1: Find entry points (functions that call others but have few callers)
+  const entryPoints = findEntryPoints(
+    knowledgeGraph,
+    reverseCallsEdges,
+    callsEdges,
+    nodeMap,
+    processFilter,
+  );
 
   onProgress?.(`Found ${entryPoints.length} entry points, tracing flows...`, 20);
 
@@ -108,7 +122,14 @@ export const processProcesses = async (
 
   for (let i = 0; i < entryPoints.length && allTraces.length < cfg.maxProcesses * 2; i++) {
     const entryId = entryPoints[i];
-    const traces = traceFromEntryPoint(entryId, callsEdges, cfg);
+    const traces = traceFromEntryPoint(
+      entryId,
+      callsEdges,
+      cfg,
+      nodeMap,
+      processFilter,
+      methodClassMap,
+    );
 
     // Filter out traces that are too short
     traces.filter((t) => t.length >= cfg.minSteps).forEach((t) => allTraces.push(t));
@@ -139,13 +160,21 @@ export const processProcesses = async (
     .sort((a, b) => b.length - a.length)
     .slice(0, cfg.maxProcesses);
 
-  onProgress?.(`Creating ${limitedTraces.length} process nodes...`, 80);
+  const tracesAfterFilter =
+    processFilter &&
+    (processFilter.filePatterns.length > 0 || processFilter.classPatterns.length > 0)
+      ? limitedTraces.filter(
+          (trace) => !shouldDropTraceForFilter(trace, nodeMap, processFilter, methodClassMap),
+        )
+      : limitedTraces;
+
+  onProgress?.(`Creating ${tracesAfterFilter.length} process nodes...`, 80);
 
   // Step 5: Create process nodes
   const processes: ProcessNode[] = [];
   const steps: ProcessStep[] = [];
 
-  limitedTraces.forEach((trace, idx) => {
+  tracesAfterFilter.forEach((trace, idx) => {
     const entryPointId = trace[0];
     const terminalId = trace[trace.length - 1];
 
@@ -226,6 +255,99 @@ type AdjacencyList = Map<string, string[]>;
  */
 const MIN_TRACE_CONFIDENCE = 0.5;
 
+// ============================================================================
+// PROCESS filter: Method → owning Class (HAS_METHOD: Class → Method)
+// ============================================================================
+
+const buildMethodToClassNameMap = (graph: KnowledgeGraph): Map<string, string> => {
+  const map = new Map<string, string>();
+  for (const rel of graph.iterRelationships()) {
+    if (rel.type !== 'HAS_METHOD') continue;
+    const cls = graph.getNode(rel.sourceId);
+    if (cls?.label !== 'Class') continue;
+    const name = cls.properties.name;
+    if (typeof name === 'string' && name.length > 0) {
+      map.set(rel.targetId, name);
+    }
+  }
+  return map;
+};
+
+const shouldDropTraceForFilter = (
+  trace: string[],
+  nodeMap: Map<string, GraphNode>,
+  filter: ProcessFilterConfig,
+  methodClassMap: Map<string, string>,
+): boolean => {
+  const entry = nodeMap.get(trace[0]);
+  const entryPath = entry?.properties.filePath || '';
+  if (
+    filter.filePatterns.length > 0 &&
+    filePathMatchesProcessFilter(entryPath, filter.filePatterns)
+  ) {
+    return true;
+  }
+  if (filter.classPatterns.length === 0) return false;
+  const n0 = nodeMap.get(trace[0]);
+  if (n0?.label === 'Method') {
+    const className = methodClassMap.get(trace[0]);
+    if (className && classNameMatchesProcessFilter(className, filter.classPatterns)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/** C++ process tracing: from a C++ caller, only follow CALLS into Function/Method. */
+const CPP_TRACE_CALLEE_LABELS = new Set<NodeLabel>(['Function', 'Method']);
+
+const isCppSymbolNode = (n: GraphNode | undefined): boolean =>
+  n?.properties.language === SupportedLanguages.CPlusPlus;
+
+const isCppTraceableCallee = (n: GraphNode | undefined): boolean =>
+  !!n && CPP_TRACE_CALLEE_LABELS.has(n.label);
+
+const getCalleesForProcessTrace = (
+  sourceId: string,
+  callsEdges: AdjacencyList,
+  nodeMap: Map<string, GraphNode>,
+): string[] => {
+  const raw = callsEdges.get(sourceId) || [];
+  const src = nodeMap.get(sourceId);
+  if (!isCppSymbolNode(src)) return raw;
+  return raw.filter((tid) => isCppTraceableCallee(nodeMap.get(tid)));
+};
+
+/** True if this Method node's owning class matches CLASS filter patterns. */
+const isMethodFilteredByClass = (
+  nodeId: string,
+  nodeMap: Map<string, GraphNode>,
+  filter: ProcessFilterConfig | undefined,
+  methodClassMap: Map<string, string>,
+): boolean => {
+  if (!filter || filter.classPatterns.length === 0) return false;
+  const n = nodeMap.get(nodeId);
+  if (n?.label !== 'Method') return false;
+  const cn = methodClassMap.get(nodeId);
+  return !!(cn && classNameMatchesProcessFilter(cn, filter.classPatterns));
+};
+
+const collectTargetsSkippingFilteredClassMethods = (
+  calleeId: string,
+  nodeMap: Map<string, GraphNode>,
+  filter: ProcessFilterConfig,
+  methodClassMap: Map<string, string>,
+  path: string[],
+  branchBudget: number,
+): string[] => {
+  if (branchBudget <= 0) return [];
+  if (isMethodFilteredByClass(calleeId, nodeMap, filter, methodClassMap)) {
+    return [];
+  }
+  if (path.includes(calleeId)) return [];
+  return [calleeId];
+};
+
 const buildCallsGraph = (graph: KnowledgeGraph): AdjacencyList => {
   const adj = new Map<string, string[]>();
 
@@ -270,6 +392,8 @@ const findEntryPoints = (
   graph: KnowledgeGraph,
   reverseCallsEdges: AdjacencyList,
   callsEdges: AdjacencyList,
+  nodeMap: Map<string, GraphNode>,
+  processFilter?: ProcessFilterConfig,
 ): string[] => {
   const symbolTypes = new Set<NodeLabel>(['Function', 'Method']);
   const entryPointCandidates: {
@@ -283,11 +407,19 @@ const findEntryPoints = (
 
     const filePath = node.properties.filePath || '';
 
+    if (
+      processFilter &&
+      processFilter.filePatterns.length > 0 &&
+      filePathMatchesProcessFilter(filePath, processFilter.filePatterns)
+    ) {
+      continue;
+    }
+
     // Skip test files entirely
     if (isTestFile(filePath)) continue;
 
     const callers = reverseCallsEdges.get(node.id) || [];
-    const callees = callsEdges.get(node.id) || [];
+    const callees = getCalleesForProcessTrace(node.id, callsEdges, nodeMap);
 
     // Must have at least 1 outgoing call to trace forward
     if (callees.length === 0) continue;
@@ -341,11 +473,17 @@ const findEntryPoints = (
 /**
  * Trace forward from an entry point using BFS.
  * Returns all distinct paths up to maxDepth.
+ *
+ * PROCESS.CLASS: if a direct callee is a filtered-class Method, do not expand
+ * that branch (don't enter B). Other outgoing edges remain unaffected.
  */
 const traceFromEntryPoint = (
   entryId: string,
   callsEdges: AdjacencyList,
   config: ProcessDetectionConfig,
+  nodeMap: Map<string, GraphNode>,
+  processFilter?: ProcessFilterConfig,
+  methodClassMap?: Map<string, string>,
 ): string[][] => {
   const traces: string[][] = [];
 
@@ -356,8 +494,8 @@ const traceFromEntryPoint = (
   while (queue.length > 0 && traces.length < config.maxBranching * 3) {
     const [currentId, path] = queue.shift()!;
 
-    // Get outgoing calls
-    const callees = callsEdges.get(currentId) || [];
+    // Get outgoing calls (C++ callers: Function/Method targets only)
+    const callees = getCalleesForProcessTrace(currentId, callsEdges, nodeMap);
 
     if (callees.length === 0) {
       // Terminal node - this is a complete trace
@@ -373,12 +511,32 @@ const traceFromEntryPoint = (
       // Continue tracing - limit branching
       const limitedCallees = callees.slice(0, config.maxBranching);
       let addedBranch = false;
+      let remaining = config.maxBranching;
+      const useClassSkip =
+        processFilter && methodClassMap && processFilter.classPatterns.length > 0;
 
       for (const calleeId of limitedCallees) {
-        // Avoid cycles
-        if (!path.includes(calleeId)) {
-          queue.push([calleeId, [...path, calleeId]]);
-          addedBranch = true;
+        if (remaining <= 0) break;
+        const targets = useClassSkip
+          ? collectTargetsSkippingFilteredClassMethods(
+              calleeId,
+              nodeMap,
+              processFilter,
+              methodClassMap,
+              path,
+              remaining,
+            )
+          : path.includes(calleeId)
+            ? []
+            : [calleeId];
+
+        for (const targetId of targets) {
+          if (remaining <= 0) break;
+          if (!path.includes(targetId)) {
+            queue.push([targetId, [...path, targetId]]);
+            addedBranch = true;
+            remaining--;
+          }
         }
       }
 

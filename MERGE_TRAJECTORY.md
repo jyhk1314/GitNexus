@@ -53,3 +53,17 @@
 1. 从合并前提交（如 `bc1f3c5`）对比 `call-processor.ts` / `parse-worker.ts` 等，将 **C++ 优化、minimumParameterCount、process 过滤** 等改动按功能拆分支移植到当前上游结构。
 2. 运行 `gitnexus` 集成测试：`npm test`（视环境而定）。
 3. 将本合并提交推送到 `origin` 前在私有部署环境做一次 **clone-analyze + 带分支 + 夜间刷新** 冒烟测试。
+
+---
+
+## 2026-04-14 本地化回灌（在 `upstream/main` 架构上补回分叉能力）
+
+在 **不替换** 上游大文件（`call-processor` / `parse-worker` 仍以 SM-19 与 `LanguageProvider` 为主线）的前提下，已做如下接入：
+
+| 改动 | 文件 |
+|------|------|
+| **Process 过滤**：`processProcesses` 增加 `processFilter`；`processes` 阶段 `loadGitNexusFilter(ctx.repoPath)` | `process-processor.ts`、`pipeline-phases/processes.ts` |
+| **C++ 导出宏预处理** | `workers/parse-worker.ts` + `cpp-export-macro-preprocess.ts` |
+| **C++ 补边**：`enrichCppCallsTargetsFromSiblingClassScope` 在 `crossFile` 阶段之后执行 | `call-processor.ts`、`pipeline-phases/cross-file.ts` |
+
+说明：`minimumParameterCount` 与上游 `requiredParameterCount`（C++ 可选形参）语义对齐，见 `method-extractors/configs/c-cpp.ts` 与 `utils/method-props.ts`。

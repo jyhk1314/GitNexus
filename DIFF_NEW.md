@@ -1,27 +1,22 @@
 # 本仓库与上游 GitNexus 的差异（合并后新版 Difflog）
 
-> 生成说明：在 **合并 `upstream/main` 之后**，本文件描述 **GitNexus_jyhk** 相对官方仓库默认分支仍保留或新增的行为差异。原 `DIFF.md` 仍适用处已并入下文第一节；历史条目见 `MERGE_TRAJECTORY.md`。
+> 在 **合并 `upstream/main` 之后**，本文件描述 **GitNexus_jyhk** 相对官方默认分支仍保留或新增的行为差异。原 [`DIFF.md`](DIFF.md) 中「带分支克隆目录名」等条目仍有效；合并操作记录见 [`MERGE_TRAJECTORY.md`](MERGE_TRAJECTORY.md)。
 
 ---
 
 ## 一、clone-analyze / Local Git：带分支时的仓库目录名（保留）
 
-与 `DIFF.md` 一致，核心规则不变：
+与 `DIFF.md` 一致：
 
 | 项 | 说明 |
 |----|------|
 | **行为** | 指定 `branch` 时，克隆目录名为 `{repoBasename}@@{branchSlug}`；未指定分支时为 `{repoBasename}`。 |
 | **分支 slug** | `branch.replace(/[^a-zA-Z0-9_\-]/g, '_')` |
-| **分隔符** | `@@`（Windows 路径合法，避免与仓库名中单 `_` 混淆） |
+| **分隔符** | `@@`（Windows 路径合法） |
 
-**实现位置（合并后）**：
+**实现位置**：`gitnexus/src/server/local-git-routes.ts`、`gitnexus/src/server/api.ts`、`gitnexus/src/server/git-clone.ts`；Web 侧 `gitnexus-web/src/components/RepoAnalyzer.tsx`、`gitnexus-web/src/services/backend-client.ts`。
 
-- **SSE 一体化接口**：`gitnexus/src/server/local-git-routes.ts` → `POST /api/repos/clone-analyze`；同文件 `POST /api/repos/zip-upload-analyze`（ZIP → `gitnexus_code`）。
-- **作业式分析接口**：`gitnexus/src/server/api.ts` → `POST /api/analyze`：请求体可选 `branch`，克隆目标目录使用 `extractRepoName(url)` + `@@` + slug，与 `~/.gitnexus/repos/` 下 `getCloneDir` 一致。
-- **Git 克隆**：`gitnexus/src/server/git-clone.ts` 中 `cloneOrPull(..., { branch })` 支持 `--branch` / `--single-branch`。
-- **Web**：`gitnexus-web/src/components/RepoAnalyzer.tsx` 可选分支输入；`gitnexus-web/src/services/backend-client.ts` 的 `startAnalyze` 支持 `branch` 字段。
-
-**专题文档**：仍见 [`docs/CLONE_ANALYZE_REPO_BRANCH_NAMING.md`](docs/CLONE_ANALYZE_REPO_BRANCH_NAMING.md)、部署说明 [`docs/DEPLOY.md`](docs/DEPLOY.md)（Local Git 相关章节）。
+**专题文档**：[`docs/CLONE_ANALYZE_REPO_BRANCH_NAMING.md`](docs/CLONE_ANALYZE_REPO_BRANCH_NAMING.md)、[`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 ---
 
@@ -29,37 +24,39 @@
 
 | 主题 | 要点 |
 |------|------|
-| **代码落盘目录** | Local Git / ZIP 流程仍使用 `gitnexus_code`（见 `local-git-routes.ts` 内 `getCodeDir()`）。 |
-| **Ladybug 句柄释放** | `evictPoolsForDbPath`（`pool-adapter.ts`）、`closeLbugForPath`（`lbug-adapter.ts`），避免 analyze 后服务端仍占库。 |
-| **仓库维护状态** | `isRepoUnderMaintenance` 在 `api.ts`、MCP `local-backend.ts` 中使用（与夜间维护文档一致）。 |
-| **依赖** | `gitnexus/package.json` 增加 `adm-zip`（ZIP 上传）。 |
+| **代码落盘目录** | Local Git / ZIP 流程使用 `gitnexus_code`（`local-git-routes.ts` → `getCodeDir()`）。 |
+| **Ladybug 句柄释放** | `pool-adapter.ts` / `lbug-adapter.ts` 在 analyze 后释放连接。 |
+| **仓库维护状态** | `isRepoUnderMaintenance`（`api.ts`、MCP `local-backend.ts`）。 |
+| **依赖** | `adm-zip`（ZIP 上传）等。 |
 
 ---
 
-## 三、合并中让位给上游的部分（需后续从旧提交移植）
+## 三、合并后以「上游架构为底」回灌的本地化能力（2026-04 起）
 
-以下文件曾为分叉深度定制（如 C++ 调用解析、`minimumParameterCount`、process 过滤等），合并冲突修复时 **已用上游版本覆盖** 以保证可编译与类型检查通过。若需完整保留原分叉行为，请从合并前提交（例如 `bc1f3c5`）做 **逐文件 diff 与 cherry-pick**，并优先对齐到上游的 `model/`、`named-bindings/` 等新结构：
+以下在首次合并时曾以整文件采纳上游；随后在 **保持 `model/`、`LanguageProvider`、DAG pipeline** 的前提下，将分叉中的关键行为**重新接入**：
 
-- `gitnexus/src/core/ingestion/call-processor.ts`
-- `gitnexus/src/core/ingestion/workers/parse-worker.ts`
-- `gitnexus/src/core/ingestion/process-processor.ts`
-- 以及 `MERGE_TRAJECTORY.md` 中列出的其余已重置文件。
-
----
-
-## 四、与上游差异体量（参考）
-
-在合并提交暂存区上，相对 `upstream/main` 的统计约为：
-
-```text
-107 files changed, 6818 insertions(+), 118 deletions(-)
-```
-
-（以实际 `git diff upstream/main` 为准，会随后续提交变化。）
+| 能力 | 说明 | 落地位置 |
+|------|------|----------|
+| **Process 过滤（`gitnexus.filter`）** | 仓库根 `gitnexus.filter` 中 `PROCESS` 的 `filePatterns` / `classPatterns`；C++ 进程追踪仅沿 `Function`/`Method` 等可调用边。 | `process-processor.ts`；`processes.ts` 在阶段内 `loadGitNexusFilter(ctx.repoPath)` 并传入 `processProcesses`。 |
+| **C++ 导出宏预处理** | 解析前 strip `class DLL_API Foo` 等宏，便于 tree-sitter 识别 `class_specifier`。 | `parse-worker.ts` 对 C/C++ 调用 `preprocessCppExportMacros`（[`cpp-export-macro-preprocess.ts`](gitnexus/src/core/ingestion/cpp-export-macro-preprocess.ts)）。 |
+| **C++ 调用图补边** | 对类作用域 Method/Constructor 的 `CALLS`，在已有边基础上补向所属 `Class`/`Struct` 的合成边（`cpp-method-implies-owner-class`）。 | `call-processor.ts` → `enrichCppCallsTargetsFromSiblingClassScope`；在 **`crossFile` 阶段之后**调用（覆盖跨文件二次 `processCalls` 产生的新边）。 |
+| **C++ 重载与「最少参数」语义** | 旧分叉中的 `minimumParameterCount` 与上游 `requiredParameterCount`（由 `optional_parameter_declaration` 等推导）在语义上等价；无需在 `parse-worker` 中重复旧版 `extractMethodSignature`。 | 上游 `method-extractors/configs/c-cpp.ts` + `utils/method-props.ts`。 |
 
 ---
 
-## 五、文档与轨迹
+## 四、上游未包含、仅本地工作区存在的文件（非 Git 历史）
 
-- **合并操作与冲突处理记录**：[`MERGE_TRAJECTORY.md`](MERGE_TRAJECTORY.md)
+若你在 **`D:\github\GitNexus`** 等目录看到未跟踪的 `gitnexus/src/cli/cli/*.py`、`commands/*.py`，这些 **不属于** 官方 `upstream/main` 的提交内容，合并时不会自动出现；需单独决定是否纳入本仓库。
+
+---
+
+## 五、与上游差异体量（参考）
+
+以本地仓库执行 `git diff upstream/main...HEAD --stat` 为准（随提交变化）。
+
+---
+
+## 六、文档与轨迹
+
+- **合并操作与冲突处理**：[`MERGE_TRAJECTORY.md`](MERGE_TRAJECTORY.md)
 - **合并前差异归档**：[`DIFF.md`](DIFF.md)
