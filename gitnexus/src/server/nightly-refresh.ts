@@ -9,7 +9,7 @@ import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { listRegisteredRepos } from '../storage/repo-manager.js';
 import { closeLbugForPath } from '../core/lbug/lbug-adapter.js';
-import { evictPoolsForDbPath } from '../mcp/core/lbug-adapter.js';
+import { evictPoolsForDbPath } from '../core/lbug/pool-adapter.js';
 import { setRepoMaintenance } from '../maintenance/repo-maintenance.js';
 import { isGitRepo } from '../storage/git.js';
 import type { LocalBackend } from '../mcp/local/local-backend.js';
