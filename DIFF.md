@@ -13,14 +13,14 @@
 | 字段 | 值 |
 |------|-----|
 | **记录日期** | 2026-04-15 |
-| **本仓库 `HEAD`** | `3500c26ecbace0187f971f57b13a81ba4812f106`（merge: `upstream/main` 至 `385ee03`） |
-| **与 `upstream/main` 的最近公共祖先（对齐点）** | `385ee037bd23a96849588686471dc9c991dd93cb` |
-| **对齐点在一句话** | `[group/sync] Fix ManifestExtractor never called — config.links always produced 0 cross-links (#827)` |
-| **对齐点 `git describe`（在官方仓库上）** | `rc/385ee037bd23a96849588686471dc9c991dd93cb` |
-| **本次自上游合入的提交范围（供审计）** | `28ddbe5d5439352b30f51eadac76bc10c7e7208f`（含）~ `385ee03`：#818 CSV 流式 drain、#823 embeddings、#825 RC CI、#827 manifest sync、#832 Windows `splitRelCsv` 等 |
-| **当时本地官方克隆 `D:\github\GitNexus` 的 `main` tip（可选对照）** | 与 **对齐点** 一致时应为 `385ee03` |
+| **本仓库 `HEAD`** | `2a7e95a92e74d4f116ed6c3a03626d408b7e95da`（cherry-pick 上游 `1df79c2`，#831 content-hash / vector index） |
+| **与 `upstream/main` 的最近公共祖先（merge-base）** | `385ee037bd23a96849588686471dc9c991dd93cb`（仍为合并 #827 批次后的分叉点） |
+| **上游 `upstream/main` tip（`git fetch` 后）** | `1df79c2eab4935682f92027fe359dcba07bcfc8d`（#831） |
+| **介于 merge-base 与上游 tip 之间的上游提交（本 fork 尚未按原历史合并）** | `32c9dda`（#834，`tree-sitter-c-sharp` pin）— 如需与官方 lockfile 完全一致可再 cherry-pick |
+| **对齐点 `git describe`（在官方仓库上，merge-base）** | `rc/385ee037bd23a96849588686471dc9c991dd93cb` |
+| **本次记录的合入** | **#831**：`git cherry-pick 1df79c2…` → `2a7e95a`（内容与上游该提交一致；`lbug-adapter` 已保留 fork 的 `closeLbugForPath` / `evictPoolsForDbPath`） |
 
-含义：**对齐点 `385ee03`** 即当前 `upstream/main` tip；本 fork 已与该 tip 历史对齐，下次对比请从 `385ee03` 之后的新提交算起。
+含义：**merge-base** 仍是 `385ee03`（因 cherry-pick 产生新提交 SHA，未快进合并整条 `main`）。功能上已包含 **#831**；若要与 **官方 `main` 完全一致**，可补 cherry-pick **`32c9dda`** 或后续再 `merge upstream/main`。
 
 #### 本次合入时保留的 fork 行为（勿被后续覆盖）
 
